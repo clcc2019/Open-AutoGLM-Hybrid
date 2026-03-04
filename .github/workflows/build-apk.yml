@@ -36,8 +36,8 @@ jobs:
     - name: Setup Keystore
       if: steps.check_signing.outputs.has_signing == 'true'
       run: |
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android-app/keystore.jks
-        chmod 600 android-app/keystore.jks
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android-app/app/keystore.jks
+        chmod 600 android-app/app/keystore.jks
 
     - name: Build Signed Release APK
       if: steps.check_signing.outputs.has_signing == 'true'
@@ -72,4 +72,4 @@ jobs:
 
     - name: Clean up keystore
       if: always()
-      run: rm -f android-app/keystore.jks
+      run: rm -f android-app/app/keystore.jks
