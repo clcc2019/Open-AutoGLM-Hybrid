@@ -121,41 +121,89 @@ class CommandExecutor(
         val appName = command.optString("app_name", "")
 
         try {
-            // 1) Try package name directly
+            // Strategy 1: launch by package name
             if (packageName.isNotEmpty()) {
-                val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-                if (intent != null) {
-                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
+                if (tryLaunchPackage(packageName)) {
+                    Log.i(TAG, "通过包名启动: $packageName")
                     sendActionResult(requestId, true)
                     return
                 }
             }
 
-            // 2) Search by app label (display name)
+            // Strategy 2: exact match on app label
             if (appName.isNotEmpty()) {
                 val pm = context.packageManager
-                val packages = pm.getInstalledApplications(0)
-                for (appInfo in packages) {
-                    val label = pm.getApplicationLabel(appInfo).toString()
-                    if (label == appName || label.contains(appName) || appName.contains(label)) {
-                        val intent = pm.getLaunchIntentForPackage(appInfo.packageName)
-                        if (intent != null) {
-                            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            context.startActivity(intent)
-                            Log.i(TAG, "通过应用名 '$appName' 找到: ${appInfo.packageName}")
+                val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
+                mainIntent.addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+
+                // 2a) exact match
+                for (info in resolveInfos) {
+                    val label = info.loadLabel(pm).toString()
+                    if (label == appName) {
+                        if (tryLaunchPackage(info.activityInfo.packageName)) {
+                            Log.i(TAG, "精确匹配应用名 '$appName' -> ${info.activityInfo.packageName}")
                             sendActionResult(requestId, true)
                             return
                         }
                     }
                 }
-                sendActionResult(requestId, false, "找不到应用: $appName")
+
+                // 2b) fuzzy match (contains)
+                for (info in resolveInfos) {
+                    val label = info.loadLabel(pm).toString()
+                    if (label.contains(appName) || appName.contains(label)) {
+                        if (tryLaunchPackage(info.activityInfo.packageName)) {
+                            Log.i(TAG, "模糊匹配应用名 '$appName' -> $label (${info.activityInfo.packageName})")
+                            sendActionResult(requestId, true)
+                            return
+                        }
+                    }
+                }
+
+                // 2c) case-insensitive match
+                val lowerName = appName.lowercase()
+                for (info in resolveInfos) {
+                    val label = info.loadLabel(pm).toString().lowercase()
+                    if (label.contains(lowerName) || lowerName.contains(label)) {
+                        if (tryLaunchPackage(info.activityInfo.packageName)) {
+                            Log.i(TAG, "忽略大小写匹配 '$appName' -> ${info.activityInfo.packageName}")
+                            sendActionResult(requestId, true)
+                            return
+                        }
+                    }
+                }
+
+                // Strategy 3: fallback — search all installed apps (not just launcher ones)
+                val allApps = pm.getInstalledApplications(0)
+                for (appInfo in allApps) {
+                    val label = pm.getApplicationLabel(appInfo).toString()
+                    if (label == appName || label.contains(appName) || appName.contains(label)) {
+                        if (tryLaunchPackage(appInfo.packageName)) {
+                            Log.i(TAG, "全量搜索匹配 '$appName' -> $label (${appInfo.packageName})")
+                            sendActionResult(requestId, true)
+                            return
+                        }
+                    }
+                }
+
+                val installed = resolveInfos.map { it.loadLabel(pm).toString() }.sorted()
+                Log.w(TAG, "找不到应用 '$appName'，已安装的启动器应用: ${installed.joinToString()}")
+                sendActionResult(requestId, false, "找不到应用: $appName (已搜索 ${resolveInfos.size} 个应用)")
             } else {
                 sendActionResult(requestId, false, "应用未安装: $packageName")
             }
         } catch (e: Exception) {
+            Log.e(TAG, "启动应用异常", e)
             sendActionResult(requestId, false, "启动应用失败: ${e.message}")
         }
+    }
+
+    private fun tryLaunchPackage(packageName: String): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        return true
     }
 
     private fun sendScreenshotResult(requestId: String, success: Boolean, image: String = "", error: String = "") {

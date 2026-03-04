@@ -1,6 +1,11 @@
 """
 AI Agent：适配 autoglm-phone 模型的输出格式。
 
+参照 Open-AutoGLM 原版实现：
+  - 使用 system prompt 规范输出格式
+  - 每步只保留当前截图，执行后立即移除图片只保留文本
+  - 将操作结果反馈给模型
+
 autoglm-phone 模型输出格式:
   <think>思考过程</think>
   <answer>do(action="Tap", element=[500, 800])</answer>
@@ -21,6 +26,7 @@ autoglm-phone 模型输出格式:
 import asyncio
 import logging
 import re
+from datetime import datetime
 from typing import Optional, Callable, Awaitable
 
 from openai import AsyncOpenAI
@@ -36,6 +42,54 @@ from protocol import (
 logger = logging.getLogger(__name__)
 
 SWIPE_DIST = {"short": 200, "medium": 500, "long": 800}
+
+
+def _build_system_prompt() -> str:
+    now = datetime.now()
+    date_str = now.strftime("%Y年%m月%d日 %A")
+    weekday_map = {
+        "Monday": "星期一", "Tuesday": "星期二", "Wednesday": "星期三",
+        "Thursday": "星期四", "Friday": "星期五", "Saturday": "星期六",
+        "Sunday": "星期日",
+    }
+    for en, zh in weekday_map.items():
+        date_str = date_str.replace(en, zh)
+
+    app_list = "、".join(APP_PACKAGES.keys())
+
+    return f"""今天的日期是: {date_str}
+你是一个手机操作智能体，根据用户任务和当前屏幕截图执行操作。
+
+## 输出格式
+你必须严格按照以下格式输出：
+<answer>do(action="操作名", 参数...)</answer>
+
+或直接使用简写格式：
+<answer>Launch("微信")</answer>
+<answer>Tap(element=[500, 800])</answer>
+
+## 可用操作
+- Launch(app="应用名"): 启动应用。支持的应用: {app_list}
+- Tap(element=[x, y]): 点击坐标
+- Type(text="文本"): 输入文本
+- Swipe(element=[x, y], direction="up"/"down"/"left"/"right", dist="short"/"medium"/"long"): 滑动
+- Back(): 返回上一页
+- Home(): 返回桌面
+- Long Press(element=[x, y]): 长按
+- Double Tap(element=[x, y]): 双击
+- Wait(): 等待页面加载（最多3秒）
+- Take_over(message="原因"): 需要人工接管（登录/验证码等）
+- finished(content="任务完成总结"): 任务完成时调用
+
+## 执行规则
+1. 每次只输出一个操作
+2. 先观察当前屏幕，判断当前状态，再决定下一步操作
+3. 如果需要打开某个应用，使用 Launch 操作
+4. 遇到不相关的弹窗或页面，先用 Back() 返回
+5. 如果操作失败，尝试其他方式完成任务
+6. 任务完成后必须调用 finished()
+7. 不要连续执行相同的失败操作超过2次
+8. 如果当前不在目标应用中，先用 Launch 切换到目标应用"""
 
 
 class PhoneAgent:
@@ -57,9 +111,13 @@ class PhoneAgent:
     ) -> None:
         await send_to_device(TaskStarted(task_id=task_id, task=task))
 
+        system_prompt = _build_system_prompt()
         messages = [
-            {"role": "user", "content": task},
+            {"role": "system", "content": system_prompt},
         ]
+
+        consecutive_failures = 0
+        last_action_name = None
 
         for step in range(config.max_agent_steps):
             logger.info(f"[{task_id}] Step {step + 1}/{config.max_agent_steps}")
@@ -76,26 +134,16 @@ class PhoneAgent:
                 await send_to_device(TaskFailed(task_id=task_id, reason=f"截图失败: {error}"))
                 return
 
+            user_content = []
             if step == 0:
-                messages[-1] = {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": task},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{screenshot_resp.image}"
-                            },
-                        },
-                    ],
-                }
-            else:
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{screenshot_resp.image}"}},
-                    ],
-                })
+                user_content.append({"type": "text", "text": task})
+            user_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{screenshot_resp.image}"
+                },
+            })
+            messages.append({"role": "user", "content": user_content})
 
             try:
                 completion = await self.client.chat.completions.create(
@@ -109,22 +157,51 @@ class PhoneAgent:
                 logger.info(f"[{task_id}] AI: {ai_response[:300]}")
             except Exception as e:
                 logger.error(f"[{task_id}] AI API error: {e}")
-                await send_to_device(TaskFailed(task_id=task_id, reason=f"AI 调用失败: {e}"))
-                return
+                # Token overflow — trim oldest messages and retry once
+                if "25480" in str(e) or "token" in str(e).lower():
+                    self._trim_context(messages)
+                    try:
+                        completion = await self.client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            max_tokens=2000,
+                            temperature=0.1,
+                            frequency_penalty=0.2,
+                        )
+                        ai_response = completion.choices[0].message.content.strip()
+                        logger.info(f"[{task_id}] AI (retry): {ai_response[:300]}")
+                    except Exception as e2:
+                        logger.error(f"[{task_id}] AI API retry failed: {e2}")
+                        await send_to_device(TaskFailed(task_id=task_id, reason=f"AI 调用失败: {e2}"))
+                        return
+                else:
+                    await send_to_device(TaskFailed(task_id=task_id, reason=f"AI 调用失败: {e}"))
+                    return
 
             messages.append({"role": "assistant", "content": ai_response})
+
+            # Key optimization: remove screenshot from the user message we just sent.
+            # This follows Open-AutoGLM's approach — only the current step's screenshot
+            # is visible to the model; after getting the response, strip it to save tokens.
+            self._remove_images_from_last_user(messages)
 
             answer = self._extract_answer(ai_response)
             if answer is None:
                 logger.warning(f"[{task_id}] 无法从 AI 回复中提取 answer")
-                messages.append({"role": "user", "content": "无法解析你的回复，请使用标准 <answer> 格式。"})
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    await send_to_device(TaskFailed(task_id=task_id, reason="连续多次无法解析 AI 回复"))
+                    return
+                messages.append({"role": "user", "content": "无法解析你的回复，请严格使用 <answer>操作</answer> 格式输出一个操作。"})
                 continue
 
             action_name, params = self._parse_do(answer)
             if action_name is None:
-                logger.warning(f"[{task_id}] 无法解析 do(): {answer}")
+                logger.warning(f"[{task_id}] 无法解析 action: {answer}")
+                consecutive_failures += 1
                 continue
 
+            consecutive_failures = 0
             logger.info(f"[{task_id}] Action: {action_name} {params}")
 
             if action_name == "finished":
@@ -140,6 +217,7 @@ class PhoneAgent:
 
             if action_name == "Wait":
                 await asyncio.sleep(3)
+                last_action_name = "Wait"
                 continue
 
             command = self._build_command(action_name, params)
@@ -155,9 +233,15 @@ class PhoneAgent:
                 return
 
             success = getattr(action_resp, "success", False)
+            error_msg = getattr(action_resp, "error", "")
+
             if not success:
-                error = getattr(action_resp, "error", "")
-                logger.warning(f"[{task_id}] 操作失败: {error}")
+                logger.warning(f"[{task_id}] 操作失败: {error_msg}")
+                messages.append({
+                    "role": "user",
+                    "content": f"操作 {action_name} 执行失败: {error_msg}。请尝试其他方式。"
+                })
+            last_action_name = action_name
 
             await asyncio.sleep(1.5)
 
@@ -166,7 +250,36 @@ class PhoneAgent:
             reason=f"超过最大步数限制 ({config.max_agent_steps})"
         ))
 
-    # Action names the model may emit directly (without do() wrapper)
+    @staticmethod
+    def _remove_images_from_last_user(messages: list) -> None:
+        """Find the last user message and strip image_url parts, keeping only text."""
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                text_parts = [p for p in msg["content"] if isinstance(p, dict) and p.get("type") == "text"]
+                if text_parts:
+                    messages[i] = {"role": "user", "content": text_parts}
+                else:
+                    messages[i] = {"role": "user", "content": "[截图]"}
+                break
+
+    @staticmethod
+    def _trim_context(messages: list) -> None:
+        """
+        Emergency trim when approaching token limit.
+        Keep system prompt (index 0), the first user task message, and the last 6 messages.
+        """
+        if len(messages) <= 8:
+            return
+        system = messages[0]
+        first_user = messages[1] if len(messages) > 1 else None
+        tail = messages[-6:]
+        messages.clear()
+        messages.append(system)
+        if first_user:
+            messages.append(first_user)
+        messages.extend(tail)
+
     _KNOWN_ACTIONS = {
         "Launch", "Tap", "Type", "Swipe", "Back", "Home",
         "Long Press", "Long_Press", "LongPress",
@@ -198,8 +311,7 @@ class PhoneAgent:
         if m:
             return m.group(0)
 
-        # 4) Bare action calls: Launch("微信"), Tap([500, 800]), Back(), etc.
-        #    Search from the END of the text so we get the last (most recent) action
+        # 4) Bare action calls — search from the END so we get the last (most recent) action
         for action in self._KNOWN_ACTIONS:
             escaped = re.escape(action)
             pattern = rf'{escaped}\s*\(.*?\)'
@@ -212,12 +324,6 @@ class PhoneAgent:
     def _parse_do(self, answer: str) -> tuple:
         """
         解析多种 action 格式，返回 (action_name, params_dict)。
-        支持:
-          do(action="Tap", element=[500, 800])
-          Launch("微信")
-          Tap([500, 800])
-          Back()
-          finished(content="...")
         """
         # finished(content="...")
         m = re.match(r'finished\((.*)\)', answer, re.DOTALL)
@@ -250,18 +356,9 @@ class PhoneAgent:
         return (None, {})
 
     def _parse_bare_args(self, action: str, args_str: str) -> dict:
-        """
-        解析裸 action 调用的参数。
-        Launch("微信") → {"app": "微信"}
-        Tap([500, 800]) → {"element": [500, 800]}
-        Type("你好") → {"text": "你好"}
-        Swipe([540, 1200], "up") → {"element": [540, 1200], "direction": "up"}
-        Back() → {}
-        """
         if not args_str:
             return {}
 
-        # 如果有 kwargs 格式，优先用 kwargs 解析
         if '=' in args_str:
             return self._parse_kwargs(args_str)
 
@@ -285,18 +382,15 @@ class PhoneAgent:
             return {}
 
         if action == "Swipe":
-            parts = []
             element = []
             direction = "up"
             dist = "medium"
-            # Extract [x, y]
             m = re.search(r'\[([^\]]+)\]', args_str)
             if m:
                 try:
                     element = [int(x.strip()) for x in m.group(1).split(',')]
                 except ValueError:
                     pass
-            # Extract quoted strings for direction/dist
             strings = re.findall(r'"([^"]*)"', args_str)
             if not strings:
                 strings = re.findall(r"'([^']*)'", args_str)
@@ -314,10 +408,7 @@ class PhoneAgent:
         return {}
 
     def _parse_kwargs(self, s: str) -> dict:
-        """解析 Python 风格的 kwargs 字符串: action="Tap", element=[500, 800]"""
         result = {}
-        # 匹配 key=value 对
-        # value 可以是: "string", [list], number
         pattern = r'(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|\[.*?\]|\d+(?:\.\d+)?)'
         for m in re.finditer(pattern, s):
             key = m.group(1)
