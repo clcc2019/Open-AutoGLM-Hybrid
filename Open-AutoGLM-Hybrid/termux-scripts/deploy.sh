@@ -155,43 +155,111 @@ PYTHON_EOF
     print_success "混合方案脚本下载完成"
 }
 
+# 配置 AI 服务
+configure_ai_service() {
+    print_info "配置 AI 服务..."
+
+    echo ""
+    echo "请选择 AI 服务提供商:"
+    echo "  1) 智谱 AI (推荐)"
+    echo "  2) GRS AI"
+    echo ""
+    read -p "请输入选项 (1/2): " choice
+
+    case $choice in
+        1)
+            configure_zhipu_ai
+            ;;
+        2)
+            configure_grs_ai
+            ;;
+        *)
+            print_warning "无效选项，默认使用智谱 AI"
+            configure_zhipu_ai
+            ;;
+    esac
+}
+
+# 配置智谱 AI
+configure_zhipu_ai() {
+    print_info "配置智谱 AI..."
+
+    echo ""
+    echo "请输入您的智谱 AI API Key:"
+    read -p "API Key: " api_key
+
+    if [ -z "$api_key" ]; then
+        print_warning "未输入 API Key，跳过配置"
+        print_warning "您可以稍后手动编辑: ~/.autoglm/config.ini"
+        return
+    fi
+
+    echo ""
+    echo "请选择智谱模型:"
+    echo "  1) GLM-4V (推荐 - 支持视觉理解)"
+    echo "  2) GLM-4"
+    echo "  3) GLM-3-Turbo"
+    echo ""
+    read -p "请输入选项 (1/2/3，默认 1): " model_choice
+
+    case $model_choice in
+        1)
+            model="glm-4v"
+            ;;
+        2)
+            model="glm-4"
+            ;;
+        3)
+            model="glm-3-turbo"
+            ;;
+        *)
+            model="glm-4v"
+            ;;
+    esac
+
+    print_info "已选择模型: $model"
+
+    # 创建 INI 配置文件
+    cat > ~/.autoglm/config.ini << EOF
+[ai]
+provider = zhipu
+base_url = https://open.bigmodel.cn/api/paas/v4
+api_key = $api_key
+model = $model
+
+[helper]
+url = http://localhost:8080
+EOF
+
+    print_success "智谱 AI 配置完成"
+}
+
 # 配置 GRS AI
-configure_grsai() {
+configure_grs_ai() {
     print_info "配置 GRS AI..."
-    
+
     echo ""
     echo "请输入您的 GRS AI API Key:"
     read -p "API Key: " api_key
-    
+
     if [ -z "$api_key" ]; then
         print_warning "未输入 API Key，跳过配置"
-        print_warning "您可以稍后手动配置: export PHONE_AGENT_API_KEY='your_key'"
+        print_warning "您可以稍后手动编辑: ~/.autoglm/config.ini"
         return
     fi
-    
-    # 创建配置文件
-    cat > ~/.autoglm/config.sh << EOF
-#!/data/data/com.termux/files/usr/bin/bash
 
-# GRS AI 配置
-export PHONE_AGENT_BASE_URL="https://api.grsai.com/v1"
-export PHONE_AGENT_API_KEY="$api_key"
-export PHONE_AGENT_MODEL="gpt-4-vision-preview"
+    # 创建 INI 配置文件
+    cat > ~/.autoglm/config.ini << EOF
+[ai]
+provider = grs
+base_url = https://api.grsai.com/v1
+api_key = $api_key
+model = gpt-4-vision-preview
 
-# AutoGLM Helper 配置
-export AUTOGLM_HELPER_URL="http://localhost:8080"
+[helper]
+url = http://localhost:8080
 EOF
-    
-    # 添加到 .bashrc
-    if ! grep -q "source ~/.autoglm/config.sh" ~/.bashrc; then
-        echo "" >> ~/.bashrc
-        echo "# AutoGLM 配置" >> ~/.bashrc
-        echo "source ~/.autoglm/config.sh" >> ~/.bashrc
-    fi
-    
-    # 立即加载配置
-    source ~/.autoglm/config.sh
-    
+
     print_success "GRS AI 配置完成"
 }
 
@@ -206,21 +274,29 @@ create_launcher() {
     cat > ~/bin/autoglm << 'LAUNCHER_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
-# 加载配置
-source ~/.autoglm/config.sh
+# 配置文件路径
+CONFIG_FILE=~/.autoglm/config.ini
+
+# 读取 INI 配置并导出环境变量
+if [ -f "$CONFIG_FILE" ]; then
+    export PHONE_AGENT_BASE_URL=$(grep -E '^base_url\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
+    export PHONE_AGENT_API_KEY=$(grep -E '^api_key\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
+    export PHONE_AGENT_MODEL=$(grep -E '^model\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
+    export AUTOGLM_HELPER_URL=$(grep -E '^url\s*=' "$CONFIG_FILE" | tail -1 | cut -d'=' -f2 | xargs)
+fi
 
 # 启动 AutoGLM
 cd ~/Open-AutoGLM
 python main.py "$@"
 LAUNCHER_EOF
-    
+
     chmod +x ~/bin/autoglm
-    
+
     # 确保 ~/bin 在 PATH 中
     if ! grep -q 'export PATH=$PATH:~/bin' ~/.bashrc; then
         echo 'export PATH=$PATH:~/bin' >> ~/.bashrc
     fi
-    
+
     print_success "启动脚本创建完成"
 }
 
@@ -262,11 +338,15 @@ check_helper_app() {
 # 显示完成信息
 show_completion() {
     print_success "部署完成！"
-    
+
     echo ""
     echo "============================================================"
     echo "  部署成功！"
     echo "============================================================"
+    echo ""
+    echo "支持的 AI 服务:"
+    echo "  - 智谱 AI (GLM-4V, GLM-4, GLM-3-Turbo)"
+    echo "  - GRS AI (GPT-4-Vision)"
     echo ""
     echo "使用方法:"
     echo "  1. 确保 AutoGLM Helper 已运行并开启无障碍权限"
@@ -274,10 +354,16 @@ show_completion() {
     echo "  3. 输入任务，如: 打开淘宝搜索蓝牙耳机"
     echo ""
     echo "配置文件:"
-    echo "  ~/.autoglm/config.sh"
+    echo "  ~/.autoglm/config.ini"
     echo ""
     echo "启动命令:"
     echo "  autoglm"
+    echo ""
+    echo "切换 AI 服务:"
+    echo "  编辑 ~/.autoglm/config.ini 修改以下配置:"
+    echo "  - base_url (API 地址)"
+    echo "  - api_key (API 密钥)"
+    echo "  - model (模型名称)"
     echo ""
     echo "故障排除:"
     echo "  - 检查 AutoGLM Helper 是否运行"
@@ -306,7 +392,7 @@ main() {
     download_autoglm
     install_autoglm
     download_hybrid_scripts
-    configure_grsai
+    configure_ai_service
     create_launcher
     check_helper_app
     show_completion
