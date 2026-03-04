@@ -58,12 +58,10 @@ android {
 }
 
 dependencies {
-    // Kotlin
     implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.0")
-    
-    // NanoHTTPD - 轻量级 HTTP 服务器
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-    
-    // JSON 处理 (Android 自带，但显式声明)
-    // implementation("org.json:json:20230227")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
 }
