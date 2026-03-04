@@ -1,29 +1,23 @@
 """
-AI Agent：适配 autoglm-phone 模型的输出格式。
+AI Agent：严格参照 Open-AutoGLM 原版实现。
 
-参照 Open-AutoGLM 原版实现：
-  - 使用 system prompt 规范输出格式
-  - 每步只保留当前截图，执行后立即移除图片只保留文本
-  - 将操作结果反馈给模型
+关键设计（与 Open-AutoGLM 一致）：
+  1. 模型输出 0-999 相对坐标，服务端按屏幕尺寸转换为像素坐标
+  2. 截图使用 PNG 格式，不做缩放
+  3. 每步只保留当前截图，执行后立即移除图片只保留文本
+  4. 使用 screen_info 传递当前应用等上下文信息
+  5. System prompt 包含完整的操作说明和规则
 
 autoglm-phone 模型输出格式:
   <think>思考过程</think>
-  <answer>do(action="Tap", element=[500, 800])</answer>
-
-支持的 action:
-  Launch(app="微信")
-  Tap(element=[x, y])
-  Type(text="你好")
-  Swipe(element=[x1, y1], direction="up"/"down"/"left"/"right", dist="medium")
-  Back()
-  Home()
-  Long Press(element=[x, y])
-  Wait()
-  Take_over(message="请手动操作")
-  finished(content="任务完成总结")
+  do(action="Tap", element=[500, 800])
+  或
+  finish(message="任务完成总结")
 """
 
+import ast
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime
@@ -35,61 +29,92 @@ from config import config
 from protocol import (
     ServerMessage, ScreenshotRequest, TapCommand, SwipeCommand,
     InputCommand, BackCommand, HomeCommand, LaunchAppCommand,
+    LongPressCommand, DoubleTapCommand,
     TaskStarted, TaskCompleted, TaskFailed,
     ClientMessage, ScreenshotResult, ActionResult,
 )
 
 logger = logging.getLogger(__name__)
 
-SWIPE_DIST = {"short": 200, "medium": 500, "long": 800}
-
 
 def _build_system_prompt() -> str:
+    """参照 Open-AutoGLM phone_agent/config/prompts_zh.py 构建 system prompt"""
     now = datetime.now()
-    date_str = now.strftime("%Y年%m月%d日 %A")
     weekday_map = {
-        "Monday": "星期一", "Tuesday": "星期二", "Wednesday": "星期三",
-        "Thursday": "星期四", "Friday": "星期五", "Saturday": "星期六",
-        "Sunday": "星期日",
+        0: "星期一", 1: "星期二", 2: "星期三",
+        3: "星期四", 4: "星期五", 5: "星期六", 6: "星期日",
     }
-    for en, zh in weekday_map.items():
-        date_str = date_str.replace(en, zh)
+    date_str = f"{now.year}年{now.month:02d}月{now.day:02d}日 {weekday_map[now.weekday()]}"
 
-    app_list = "、".join(APP_PACKAGES.keys())
+    app_list = ", ".join(f'"{name}"' for name in APP_PACKAGES.keys())
 
     return f"""今天的日期是: {date_str}
-你是一个手机操作智能体，根据用户任务和当前屏幕截图执行操作。
+你是一个智能体分析专家，可以根据操作历史和当前状态图执行一系列操作来完成任务。
+你必须严格按照要求输出以下格式：
+思考过程
+操作指令
 
-## 输出格式
-你必须严格按照以下格式输出：
-<answer>do(action="操作名", 参数...)</answer>
+## 可用操作指令
 
-或直接使用简写格式：
-<answer>Launch("微信")</answer>
-<answer>Tap(element=[500, 800])</answer>
+1. Launch: 启动应用
+   do(action="Launch", app="应用名")
+   支持的应用: [{app_list}]
 
-## 可用操作
-- Launch(app="应用名"): 启动应用。支持的应用: {app_list}
-- Tap(element=[x, y]): 点击坐标
-- Type(text="文本"): 输入文本
-- Swipe(element=[x, y], direction="up"/"down"/"left"/"right", dist="short"/"medium"/"long"): 滑动
-- Back(): 返回上一页
-- Home(): 返回桌面
-- Long Press(element=[x, y]): 长按
-- Double Tap(element=[x, y]): 双击
-- Wait(): 等待页面加载（最多3秒）
-- Take_over(message="原因"): 需要人工接管（登录/验证码等）
-- finished(content="任务完成总结"): 任务完成时调用
+2. Tap: 点击屏幕坐标（坐标范围 0-999，相对坐标）
+   do(action="Tap", element=[x, y])
+
+3. Type: 输入文本（需要先点击输入框）
+   do(action="Type", text="要输入的文本")
+
+4. Swipe: 滑动屏幕（坐标范围 0-999，相对坐标）
+   do(action="Swipe", start=[x1, y1], end=[x2, y2])
+   向上滑动示例: do(action="Swipe", start=[500, 800], end=[500, 200])
+   向下滑动示例: do(action="Swipe", start=[500, 200], end=[500, 800])
+
+5. Back: 返回上一页
+   do(action="Back")
+
+6. Home: 返回桌面
+   do(action="Home")
+
+7. Long Press: 长按
+   do(action="Long Press", element=[x, y])
+
+8. Double Tap: 双击
+   do(action="Double Tap", element=[x, y])
+
+9. Wait: 等待页面加载
+   do(action="Wait")
+
+10. Take_over: 需要人工接管（登录、验证码等）
+    do(action="Take_over", message="原因说明")
+
+11. finish: 任务完成
+    finish(message="任务完成的总结说明")
 
 ## 执行规则
-1. 每次只输出一个操作
-2. 先观察当前屏幕，判断当前状态，再决定下一步操作
-3. 如果需要打开某个应用，使用 Launch 操作
+
+1. 每次只输出一个操作指令
+2. 坐标使用 0-999 的相对坐标系，(0,0) 为左上角，(999,999) 为右下角
+3. 先检查当前所在的 app，如果不是目标 app，先用 Launch 切换
 4. 遇到不相关的弹窗或页面，先用 Back() 返回
-5. 如果操作失败，尝试其他方式完成任务
-6. 任务完成后必须调用 finished()
-7. 不要连续执行相同的失败操作超过2次
-8. 如果当前不在目标应用中，先用 Launch 切换到目标应用"""
+5. 如果页面还在加载中，使用 Wait 等待，但最多连续 Wait 三次
+6. 找不到目标内容时，可以使用 Swipe 滚动查找
+7. 操作前检查上一步操作是否生效，如果没有生效则调整策略
+8. 滑动无效时，调整起点位置、滑动距离或反向滑动
+9. 不要连续执行相同的失败操作超过 2 次
+10. 任务完成后必须调用 finish()
+11. 如果遇到网络问题，尝试点击"重新加载"或类似按钮"""
+
+
+def _convert_relative_to_absolute(element: list, screen_width: int, screen_height: int) -> tuple:
+    """
+    将模型输出的 0-999 相对坐标转换为实际像素坐标。
+    与 Open-AutoGLM phone_agent/actions/handler.py 中的实现一致。
+    """
+    x = int(element[0] / 1000 * screen_width)
+    y = int(element[1] / 1000 * screen_height)
+    return x, y
 
 
 class PhoneAgent:
@@ -101,6 +126,8 @@ class PhoneAgent:
             base_url=config.zhipu_base_url,
         )
         self.model = config.zhipu_model
+        self.screen_width = 0
+        self.screen_height = 0
 
     async def run_task(
         self,
@@ -112,16 +139,17 @@ class PhoneAgent:
         await send_to_device(TaskStarted(task_id=task_id, task=task))
 
         system_prompt = _build_system_prompt()
-        messages = [
+        context: list[dict] = [
             {"role": "system", "content": system_prompt},
         ]
 
-        consecutive_failures = 0
-        last_action_name = None
+        consecutive_parse_failures = 0
+        consecutive_wait = 0
 
         for step in range(config.max_agent_steps):
             logger.info(f"[{task_id}] Step {step + 1}/{config.max_agent_steps}")
 
+            # --- 1. 请求截图 ---
             screenshot_req = ScreenshotRequest()
             await send_to_device(screenshot_req)
 
@@ -134,95 +162,108 @@ class PhoneAgent:
                 await send_to_device(TaskFailed(task_id=task_id, reason=f"截图失败: {error}"))
                 return
 
+            if screenshot_resp.width > 0 and screenshot_resp.height > 0:
+                self.screen_width = screenshot_resp.width
+                self.screen_height = screenshot_resp.height
+
+            # --- 2. 构建 user message（参照 Open-AutoGLM） ---
+            screen_info = json.dumps({"screen_width": self.screen_width, "screen_height": self.screen_height}, ensure_ascii=False)
+
             user_content = []
             if step == 0:
-                user_content.append({"type": "text", "text": task})
+                text_content = f"{task}\n\n** Screen Info **\n{screen_info}"
+            else:
+                text_content = f"** Screen Info **\n{screen_info}"
+
+            # Open-AutoGLM 的消息顺序：先图片，后文本
             user_content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{screenshot_resp.image}"
+                    "url": f"data:image/png;base64,{screenshot_resp.image}"
                 },
             })
-            messages.append({"role": "user", "content": user_content})
+            user_content.append({"type": "text", "text": text_content})
 
+            context.append({"role": "user", "content": user_content})
+
+            # --- 3. 调用模型 ---
             try:
                 completion = await self.client.chat.completions.create(
                     model=self.model,
-                    messages=messages,
+                    messages=context,
                     max_tokens=3000,
                     temperature=0.1,
                     frequency_penalty=0.2,
                 )
                 ai_response = completion.choices[0].message.content.strip()
-                logger.info(f"[{task_id}] AI: {ai_response[:300]}")
+                logger.info(f"[{task_id}] AI: {ai_response[:400]}")
             except Exception as e:
                 logger.error(f"[{task_id}] AI API error: {e}")
-                # Token overflow — trim oldest messages and retry once
                 if "25480" in str(e) or "token" in str(e).lower():
-                    self._trim_context(messages)
+                    self._trim_context(context)
                     try:
                         completion = await self.client.chat.completions.create(
                             model=self.model,
-                            messages=messages,
+                            messages=context,
                             max_tokens=2000,
                             temperature=0.1,
                             frequency_penalty=0.2,
                         )
                         ai_response = completion.choices[0].message.content.strip()
-                        logger.info(f"[{task_id}] AI (retry): {ai_response[:300]}")
+                        logger.info(f"[{task_id}] AI (retry): {ai_response[:400]}")
                     except Exception as e2:
-                        logger.error(f"[{task_id}] AI API retry failed: {e2}")
+                        logger.error(f"[{task_id}] AI retry failed: {e2}")
                         await send_to_device(TaskFailed(task_id=task_id, reason=f"AI 调用失败: {e2}"))
                         return
                 else:
                     await send_to_device(TaskFailed(task_id=task_id, reason=f"AI 调用失败: {e}"))
                     return
 
-            messages.append({"role": "assistant", "content": ai_response})
+            # --- 4. 添加 assistant 消息，然后移除 user 消息中的图片 ---
+            context.append({"role": "assistant", "content": ai_response})
+            self._remove_images_from_message(context, len(context) - 2)
 
-            # Key optimization: remove screenshot from the user message we just sent.
-            # This follows Open-AutoGLM's approach — only the current step's screenshot
-            # is visible to the model; after getting the response, strip it to save tokens.
-            self._remove_images_from_last_user(messages)
-
-            answer = self._extract_answer(ai_response)
-            if answer is None:
-                logger.warning(f"[{task_id}] 无法从 AI 回复中提取 answer")
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
+            # --- 5. 解析 action ---
+            action = self._parse_response(ai_response)
+            if action is None:
+                logger.warning(f"[{task_id}] 无法解析 action")
+                consecutive_parse_failures += 1
+                if consecutive_parse_failures >= 3:
                     await send_to_device(TaskFailed(task_id=task_id, reason="连续多次无法解析 AI 回复"))
                     return
-                messages.append({"role": "user", "content": "无法解析你的回复，请严格使用 <answer>操作</answer> 格式输出一个操作。"})
+                context.append({"role": "user", "content": "无法解析你的回复，请严格使用 do(action=\"操作名\", 参数...) 或 finish(message=\"...\") 格式。"})
                 continue
 
-            action_name, params = self._parse_do(answer)
-            if action_name is None:
-                logger.warning(f"[{task_id}] 无法解析 action: {answer}")
-                consecutive_failures += 1
-                continue
+            consecutive_parse_failures = 0
+            action_name = action.get("action", action.get("_metadata", ""))
+            logger.info(f"[{task_id}] Action: {action}")
 
-            consecutive_failures = 0
-            logger.info(f"[{task_id}] Action: {action_name} {params}")
-
-            if action_name == "finished":
-                summary = params.get("content", "任务完成")
+            # --- 6. 处理特殊 action ---
+            if action.get("_metadata") == "finish":
+                summary = action.get("message", "任务完成")
                 await send_to_device(TaskCompleted(task_id=task_id, summary=summary))
                 return
 
             if action_name == "Take_over":
-                msg = params.get("message", "需要人工操作")
-                logger.warning(f"[{task_id}] 需要人工接管: {msg}")
+                msg = action.get("message", "需要人工操作")
                 await send_to_device(TaskFailed(task_id=task_id, reason=f"需要人工接管: {msg}"))
                 return
 
             if action_name == "Wait":
-                await asyncio.sleep(3)
-                last_action_name = "Wait"
+                consecutive_wait += 1
+                if consecutive_wait > 3:
+                    context.append({"role": "user", "content": "已经等待多次，请尝试其他操作。"})
+                    consecutive_wait = 0
+                else:
+                    await asyncio.sleep(3)
                 continue
+            else:
+                consecutive_wait = 0
 
-            command = self._build_command(action_name, params)
+            # --- 7. 构建并发送命令 ---
+            command = self._build_command(action)
             if command is None:
-                logger.warning(f"[{task_id}] 无法构建指令: {action_name}")
+                logger.warning(f"[{task_id}] 无法构建指令: {action}")
                 continue
 
             await send_to_device(command)
@@ -237,11 +278,10 @@ class PhoneAgent:
 
             if not success:
                 logger.warning(f"[{task_id}] 操作失败: {error_msg}")
-                messages.append({
+                context.append({
                     "role": "user",
                     "content": f"操作 {action_name} 执行失败: {error_msg}。请尝试其他方式。"
                 })
-            last_action_name = action_name
 
             await asyncio.sleep(1.5)
 
@@ -250,230 +290,237 @@ class PhoneAgent:
             reason=f"超过最大步数限制 ({config.max_agent_steps})"
         ))
 
-    @staticmethod
-    def _remove_images_from_last_user(messages: list) -> None:
-        """Find the last user message and strip image_url parts, keeping only text."""
-        for i in range(len(messages) - 1, -1, -1):
-            msg = messages[i]
-            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
-                text_parts = [p for p in msg["content"] if isinstance(p, dict) and p.get("type") == "text"]
-                if text_parts:
-                    messages[i] = {"role": "user", "content": text_parts}
-                else:
-                    messages[i] = {"role": "user", "content": "[截图]"}
-                break
+    # ---- Context management (following Open-AutoGLM) ----
 
     @staticmethod
-    def _trim_context(messages: list) -> None:
+    def _remove_images_from_message(context: list, index: int) -> None:
         """
-        Emergency trim when approaching token limit.
-        Keep system prompt (index 0), the first user task message, and the last 6 messages.
+        移除指定位置 user 消息中的图片，只保留文本。
+        与 Open-AutoGLM MessageBuilder.remove_images_from_message 一致。
         """
-        if len(messages) <= 8:
+        if index < 0 or index >= len(context):
             return
-        system = messages[0]
-        first_user = messages[1] if len(messages) > 1 else None
-        tail = messages[-6:]
-        messages.clear()
-        messages.append(system)
+        msg = context[index]
+        if isinstance(msg.get("content"), list):
+            msg["content"] = [
+                item for item in msg["content"]
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+
+    @staticmethod
+    def _trim_context(context: list) -> None:
+        """Token 溢出时紧急裁剪：保留 system + 首条任务 + 最近几轮。"""
+        if len(context) <= 8:
+            return
+        system = context[0]
+        first_user = context[1] if len(context) > 1 else None
+        tail = context[-6:]
+        context.clear()
+        context.append(system)
         if first_user:
-            messages.append(first_user)
-        messages.extend(tail)
+            context.append(first_user)
+        context.extend(tail)
 
-    _KNOWN_ACTIONS = {
-        "Launch", "Tap", "Type", "Swipe", "Back", "Home",
-        "Long Press", "Long_Press", "LongPress",
-        "Double Tap", "DoubleTap", "Wait", "Take_over",
-        "finished",
-    }
+    # ---- Action parsing (following Open-AutoGLM phone_agent/actions/handler.py) ----
 
-    def _extract_answer(self, text: str) -> Optional[str]:
+    def _parse_response(self, text: str) -> Optional[dict]:
         """
-        从模型回复中提取可执行的 action 字符串。
-        支持多种格式:
-          1. <answer>do(action="Tap", element=[500, 800])</answer>
-          2. do(action="Tap", element=[500, 800])
-          3. Launch("微信")  /  Tap([500, 800])  /  Back()
-          4. finished(content="...")
+        解析模型回复，提取 action dict。
+        参照 Open-AutoGLM 的 parse_action 逻辑。
         """
+        # 提取 action 部分（去掉 thinking）
+        action_str = self._extract_action_str(text)
+        if action_str is None:
+            return None
+
+        # finish(message="...")
+        m = re.match(r'finish\s*\((.*)\)', action_str, re.DOTALL)
+        if m:
+            msg = self._extract_string_param(m.group(1), "message")
+            return {"_metadata": "finish", "message": msg or action_str}
+
+        # do(action="...", ...)
+        m = re.match(r'do\s*\((.*)\)', action_str, re.DOTALL)
+        if m:
+            return self._parse_do_kwargs(m.group(1))
+
+        return None
+
+    def _extract_action_str(self, text: str) -> Optional[str]:
+        """从模型回复中提取 action 字符串部分。"""
         # 1) <answer>...</answer>
         m = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL)
         if m:
             return m.group(1).strip()
 
-        # 2) do(...)
-        m = re.search(r'do\(.*\)', text)
+        # 2) 查找 finish(...) 或 do(...)
+        # 从文本末尾向前搜索，取最后出现的
+        finish_matches = list(re.finditer(r'finish\s*\([^)]*\)', text, re.DOTALL))
+        if finish_matches:
+            return finish_matches[-1].group(0)
+
+        do_matches = list(re.finditer(r'do\s*\(.*?\)', text, re.DOTALL))
+        if do_matches:
+            return do_matches[-1].group(0)
+
+        # 3) 尝试匹配更宽松的 do(...)，允许多行
+        m = re.search(r'do\s*\((.+)\)', text, re.DOTALL)
         if m:
             return m.group(0)
-
-        # 3) finished(...)
-        m = re.search(r'finished\(.*\)', text)
-        if m:
-            return m.group(0)
-
-        # 4) Bare action calls — search from the END so we get the last (most recent) action
-        for action in self._KNOWN_ACTIONS:
-            escaped = re.escape(action)
-            pattern = rf'{escaped}\s*\(.*?\)'
-            matches = list(re.finditer(pattern, text, re.DOTALL))
-            if matches:
-                return matches[-1].group(0)
 
         return None
 
-    def _parse_do(self, answer: str) -> tuple:
+    def _parse_do_kwargs(self, kwargs_str: str) -> Optional[dict]:
         """
-        解析多种 action 格式，返回 (action_name, params_dict)。
+        解析 do() 内的参数。
+        参照 Open-AutoGLM 使用 ast.parse 来安全解析 Python 风格的参数。
         """
-        # finished(content="...")
-        m = re.match(r'finished\((.*)\)', answer, re.DOTALL)
-        if m:
-            params = self._parse_kwargs(m.group(1))
-            if not params.get("content"):
-                inner = m.group(1).strip().strip('"').strip("'")
-                if inner:
-                    params["content"] = inner
-            return ("finished", params)
+        try:
+            # 尝试用 ast 解析: dict(action="Tap", element=[500, 800])
+            tree = ast.parse(f"dict({kwargs_str})", mode="eval")
+            call = tree.body
+            result = {}
+            if isinstance(call, ast.Call):
+                for kw in call.keywords:
+                    key = kw.arg
+                    val = ast.literal_eval(kw.value)
+                    result[key] = val
+            if "action" in result:
+                return result
+        except Exception:
+            pass
 
-        # do(action="...", ...)
-        m = re.match(r'do\((.*)\)', answer, re.DOTALL)
-        if m:
-            kwargs_str = m.group(1)
-            params = self._parse_kwargs(kwargs_str)
-            action_name = params.pop("action", None)
-            if action_name:
-                return (action_name, params)
-
-        # Bare action: ActionName(args)
-        for action in self._KNOWN_ACTIONS:
-            escaped = re.escape(action)
-            m = re.match(rf'{escaped}\s*\((.*)\)', answer, re.DOTALL)
-            if m:
-                args_str = m.group(1).strip()
-                params = self._parse_bare_args(action, args_str)
-                return (action, params)
-
-        return (None, {})
-
-    def _parse_bare_args(self, action: str, args_str: str) -> dict:
-        if not args_str:
-            return {}
-
-        if '=' in args_str:
-            return self._parse_kwargs(args_str)
-
-        if action == "Launch":
-            app = args_str.strip().strip('"').strip("'")
-            return {"app": app}
-
-        if action == "Type":
-            text = args_str.strip().strip('"').strip("'")
-            return {"text": text}
-
-        if action == "Tap" or action in ("Long Press", "Long_Press", "LongPress",
-                                          "Double Tap", "DoubleTap"):
-            m = re.search(r'\[([^\]]+)\]', args_str)
-            if m:
-                try:
-                    nums = [int(x.strip()) for x in m.group(1).split(',')]
-                    return {"element": nums}
-                except ValueError:
-                    pass
-            return {}
-
-        if action == "Swipe":
-            element = []
-            direction = "up"
-            dist = "medium"
-            m = re.search(r'\[([^\]]+)\]', args_str)
-            if m:
-                try:
-                    element = [int(x.strip()) for x in m.group(1).split(',')]
-                except ValueError:
-                    pass
-            strings = re.findall(r'"([^"]*)"', args_str)
-            if not strings:
-                strings = re.findall(r"'([^']*)'", args_str)
-            for s in strings:
-                if s in ("up", "down", "left", "right"):
-                    direction = s
-                elif s in ("short", "medium", "long"):
-                    dist = s
-            return {"element": element, "direction": direction, "dist": dist}
-
-        if action == "Take_over":
-            msg = args_str.strip().strip('"').strip("'")
-            return {"message": msg}
-
-        return {}
-
-    def _parse_kwargs(self, s: str) -> dict:
+        # Fallback: regex 解析
         result = {}
-        pattern = r'(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|\[.*?\]|\d+(?:\.\d+)?)'
-        for m in re.finditer(pattern, s):
-            key = m.group(1)
-            val_str = m.group(2)
-            if val_str.startswith('"') and val_str.endswith('"'):
-                result[key] = val_str[1:-1]
-            elif val_str.startswith('['):
-                try:
-                    nums = [int(x.strip()) for x in val_str[1:-1].split(',') if x.strip()]
-                    result[key] = nums
-                except ValueError:
-                    result[key] = val_str
-            else:
-                try:
-                    result[key] = int(val_str)
-                except ValueError:
-                    try:
-                        result[key] = float(val_str)
-                    except ValueError:
-                        result[key] = val_str
-        return result
+        # action="..."
+        m = re.search(r'action\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["action"] = m.group(1)
 
-    def _build_command(self, action_name: str, params: dict) -> Optional[ServerMessage]:
+        # element=[x, y]
+        m = re.search(r'element\s*=\s*\[([^\]]+)\]', kwargs_str)
+        if m:
+            try:
+                result["element"] = [int(x.strip()) for x in m.group(1).split(',')]
+            except ValueError:
+                pass
+
+        # start=[x, y]
+        m = re.search(r'start\s*=\s*\[([^\]]+)\]', kwargs_str)
+        if m:
+            try:
+                result["start"] = [int(x.strip()) for x in m.group(1).split(',')]
+            except ValueError:
+                pass
+
+        # end=[x, y]
+        m = re.search(r'end\s*=\s*\[([^\]]+)\]', kwargs_str)
+        if m:
+            try:
+                result["end"] = [int(x.strip()) for x in m.group(1).split(',')]
+            except ValueError:
+                pass
+
+        # text="..."
+        m = re.search(r'text\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["text"] = m.group(1)
+
+        # app="..."
+        m = re.search(r'app\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["app"] = m.group(1)
+
+        # message="..."
+        m = re.search(r'message\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["message"] = m.group(1)
+
+        # duration="..."
+        m = re.search(r'duration\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["duration"] = m.group(1)
+
+        # direction="..."
+        m = re.search(r'direction\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["direction"] = m.group(1)
+
+        # dist="..."
+        m = re.search(r'dist\s*=\s*"([^"]*)"', kwargs_str)
+        if m:
+            result["dist"] = m.group(1)
+
+        if "action" in result:
+            return result
+        return None
+
+    @staticmethod
+    def _extract_string_param(s: str, key: str) -> Optional[str]:
+        m = re.search(rf'{key}\s*=\s*"([^"]*)"', s)
+        if m:
+            return m.group(1)
+        # 如果只有一个字符串参数
+        m = re.search(r'"([^"]*)"', s)
+        if m:
+            return m.group(1)
+        return s.strip().strip('"').strip("'") if s.strip() else None
+
+    def _build_command(self, action: dict) -> Optional[ServerMessage]:
+        """
+        将解析后的 action dict 转换为服务器命令。
+        关键：将 0-999 相对坐标转换为实际像素坐标。
+        """
+        action_name = action.get("action", "")
+        sw = self.screen_width or 1080
+        sh = self.screen_height or 2400
+
         if action_name == "Tap":
-            element = params.get("element", [])
+            element = action.get("element", [])
             if len(element) >= 2:
-                return TapCommand(x=int(element[0]), y=int(element[1]))
+                x, y = _convert_relative_to_absolute(element, sw, sh)
+                logger.info(f"  Tap: relative={element} -> pixel=({x}, {y}) screen={sw}x{sh}")
+                return TapCommand(x=x, y=y)
 
         elif action_name == "Launch":
-            app = params.get("app", "")
+            app = action.get("app", "")
             if app:
                 pkg = APP_PACKAGES.get(app, "")
                 return LaunchAppCommand(package_name=pkg, app_name=app)
 
         elif action_name == "Type":
-            text = params.get("text", "")
+            text = action.get("text", "")
             if text:
                 return InputCommand(text=text)
 
         elif action_name == "Swipe":
-            element = params.get("element", [])
-            direction = params.get("direction", "up")
-            dist_name = params.get("dist", "medium")
-            dist_px = SWIPE_DIST.get(dist_name, 500)
+            # Open-AutoGLM 使用 start=[x1,y1], end=[x2,y2] 格式
+            start = action.get("start", action.get("element", []))
+            end = action.get("end", [])
 
-            if len(element) >= 2:
-                x, y = int(element[0]), int(element[1])
+            if len(start) >= 2 and len(end) >= 2:
+                x1, y1 = _convert_relative_to_absolute(start, sw, sh)
+                x2, y2 = _convert_relative_to_absolute(end, sw, sh)
+            elif len(start) >= 2:
+                x1, y1 = _convert_relative_to_absolute(start, sw, sh)
+                direction = action.get("direction", "up")
+                dist = action.get("dist", "medium")
+                dist_px = {"short": 200, "medium": 500, "long": 800}.get(dist, 500)
+                x2, y2 = x1, y1
+                if direction == "up": y2 = max(0, y1 - dist_px)
+                elif direction == "down": y2 = min(sh, y1 + dist_px)
+                elif direction == "left": x2 = max(0, x1 - dist_px)
+                elif direction == "right": x2 = min(sw, x1 + dist_px)
             else:
-                x, y = 540, 1200
+                x1, y1 = sw // 2, sh * 3 // 4
+                x2, y2 = sw // 2, sh // 4
 
-            dx, dy = 0, 0
-            if direction == "up":
-                dy = -dist_px
-            elif direction == "down":
-                dy = dist_px
-            elif direction == "left":
-                dx = -dist_px
-            elif direction == "right":
-                dx = dist_px
+            # 计算滑动时长（参照 Open-AutoGLM）
+            dist_sq = (x1 - x2) ** 2 + (y1 - y2) ** 2
+            duration_ms = max(500, min(int(dist_sq / 1000), 2000))
 
-            return SwipeCommand(
-                x1=x, y1=y,
-                x2=max(0, x + dx), y2=max(0, y + dy),
-                duration=300,
-            )
+            logger.info(f"  Swipe: ({x1},{y1})->({x2},{y2}) duration={duration_ms}ms screen={sw}x{sh}")
+            return SwipeCommand(x1=x1, y1=y1, x2=x2, y2=y2, duration=duration_ms)
 
         elif action_name == "Back":
             return BackCommand()
@@ -482,14 +529,16 @@ class PhoneAgent:
             return HomeCommand()
 
         elif action_name in ("Long Press", "Long_Press", "LongPress"):
-            element = params.get("element", [])
+            element = action.get("element", [])
             if len(element) >= 2:
-                return TapCommand(x=int(element[0]), y=int(element[1]))
+                x, y = _convert_relative_to_absolute(element, sw, sh)
+                return LongPressCommand(x=x, y=y)
 
-        elif action_name == "Double Tap" or action_name == "DoubleTap":
-            element = params.get("element", [])
+        elif action_name in ("Double Tap", "DoubleTap", "Double_Tap"):
+            element = action.get("element", [])
             if len(element) >= 2:
-                return TapCommand(x=int(element[0]), y=int(element[1]))
+                x, y = _convert_relative_to_absolute(element, sw, sh)
+                return DoubleTapCommand(x=x, y=y)
 
         return None
 

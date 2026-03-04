@@ -20,6 +20,8 @@ class ServerMessageType(str, Enum):
     BACK = "back"
     HOME = "home"
     LAUNCH_APP = "launch_app"
+    LONG_PRESS = "long_press"
+    DOUBLE_TAP = "double_tap"
     TASK_STARTED = "task_started"
     TASK_COMPLETED = "task_completed"
     TASK_FAILED = "task_failed"
@@ -54,13 +56,26 @@ class TapCommand(ServerMessage):
     y: int
 
 
+class LongPressCommand(ServerMessage):
+    type: ServerMessageType = ServerMessageType.LONG_PRESS
+    x: int
+    y: int
+    duration: int = 1000
+
+
+class DoubleTapCommand(ServerMessage):
+    type: ServerMessageType = ServerMessageType.DOUBLE_TAP
+    x: int
+    y: int
+
+
 class SwipeCommand(ServerMessage):
     type: ServerMessageType = ServerMessageType.SWIPE
     x1: int
     y1: int
     x2: int
     y2: int
-    duration: int = 300
+    duration: int = 500
 
 
 class InputCommand(ServerMessage):
@@ -113,8 +128,10 @@ class ClientMessage(BaseModel):
 class ScreenshotResult(ClientMessage):
     type: ClientMessageType = ClientMessageType.SCREENSHOT_RESULT
     success: bool
-    image: str = ""  # Base64 encoded JPEG
+    image: str = ""  # Base64 encoded PNG
     error: str = ""
+    width: int = 0
+    height: int = 0
 
 
 class ActionResult(ClientMessage):

@@ -6,6 +6,7 @@ import org.json.JSONObject
 
 /**
  * 接收服务器下发的指令，调用无障碍服务执行，并回传结果。
+ * 坐标已由服务器从 0-999 相对坐标转换为实际像素坐标。
  */
 class CommandExecutor(
     private val context: android.content.Context,
@@ -25,6 +26,8 @@ class CommandExecutor(
                 when (type) {
                     "screenshot_request" -> handleScreenshot(requestId)
                     "tap" -> handleTap(command, requestId)
+                    "long_press" -> handleLongPress(command, requestId)
+                    "double_tap" -> handleDoubleTap(command, requestId)
                     "swipe" -> handleSwipe(command, requestId)
                     "input" -> handleInput(command, requestId)
                     "back" -> handleBack(requestId)
@@ -50,9 +53,9 @@ class CommandExecutor(
             return
         }
 
-        val base64 = service.takeScreenshotBase64()
-        if (base64 != null) {
-            sendScreenshotResult(requestId, true, image = base64)
+        val data = service.takeScreenshotWithSize()
+        if (data != null) {
+            sendScreenshotResult(requestId, true, image = data.base64, width = data.width, height = data.height)
         } else {
             sendScreenshotResult(requestId, false, error = "截图失败")
         }
@@ -66,8 +69,36 @@ class CommandExecutor(
         }
         val x = command.getInt("x")
         val y = command.getInt("y")
+        Log.i(TAG, "执行点击: ($x, $y)")
         val success = service.performTap(x, y)
-        sendActionResult(requestId, success)
+        sendActionResult(requestId, success, if (!success) "点击失败: ($x, $y)" else "")
+    }
+
+    private fun handleLongPress(command: JSONObject, requestId: String) {
+        val service = AutoGLMAccessibilityService.getInstance()
+        if (service == null) {
+            sendActionResult(requestId, false, "无障碍服务未启动")
+            return
+        }
+        val x = command.getInt("x")
+        val y = command.getInt("y")
+        val duration = command.optInt("duration", 1000)
+        Log.i(TAG, "执行长按: ($x, $y) duration=$duration")
+        val success = service.performLongPress(x, y, duration)
+        sendActionResult(requestId, success, if (!success) "长按失败" else "")
+    }
+
+    private fun handleDoubleTap(command: JSONObject, requestId: String) {
+        val service = AutoGLMAccessibilityService.getInstance()
+        if (service == null) {
+            sendActionResult(requestId, false, "无障碍服务未启动")
+            return
+        }
+        val x = command.getInt("x")
+        val y = command.getInt("y")
+        Log.i(TAG, "执行双击: ($x, $y)")
+        val success = service.performDoubleTap(x, y)
+        sendActionResult(requestId, success, if (!success) "双击失败" else "")
     }
 
     private fun handleSwipe(command: JSONObject, requestId: String) {
@@ -80,9 +111,10 @@ class CommandExecutor(
         val y1 = command.getInt("y1")
         val x2 = command.getInt("x2")
         val y2 = command.getInt("y2")
-        val duration = command.optInt("duration", 300)
+        val duration = command.optInt("duration", 500)
+        Log.i(TAG, "执行滑动: ($x1,$y1)->($x2,$y2) duration=$duration")
         val success = service.performSwipe(x1, y1, x2, y2, duration)
-        sendActionResult(requestId, success)
+        sendActionResult(requestId, success, if (!success) "滑动失败" else "")
     }
 
     private fun handleInput(command: JSONObject, requestId: String) {
@@ -92,8 +124,9 @@ class CommandExecutor(
             return
         }
         val text = command.getString("text")
+        Log.i(TAG, "执行输入: '$text'")
         val success = service.performInput(text)
-        sendActionResult(requestId, success)
+        sendActionResult(requestId, success, if (!success) "输入失败，未找到可编辑的输入框" else "")
     }
 
     private fun handleBack(requestId: String) {
@@ -130,7 +163,7 @@ class CommandExecutor(
                 }
             }
 
-            // Strategy 2: exact match on app label
+            // Strategy 2: search launcher apps by label
             if (appName.isNotEmpty()) {
                 val pm = context.packageManager
                 val mainIntent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
@@ -142,26 +175,26 @@ class CommandExecutor(
                     val label = info.loadLabel(pm).toString()
                     if (label == appName) {
                         if (tryLaunchPackage(info.activityInfo.packageName)) {
-                            Log.i(TAG, "精确匹配应用名 '$appName' -> ${info.activityInfo.packageName}")
+                            Log.i(TAG, "精确匹配 '$appName' -> ${info.activityInfo.packageName}")
                             sendActionResult(requestId, true)
                             return
                         }
                     }
                 }
 
-                // 2b) fuzzy match (contains)
+                // 2b) fuzzy match
                 for (info in resolveInfos) {
                     val label = info.loadLabel(pm).toString()
                     if (label.contains(appName) || appName.contains(label)) {
                         if (tryLaunchPackage(info.activityInfo.packageName)) {
-                            Log.i(TAG, "模糊匹配应用名 '$appName' -> $label (${info.activityInfo.packageName})")
+                            Log.i(TAG, "模糊匹配 '$appName' -> $label (${info.activityInfo.packageName})")
                             sendActionResult(requestId, true)
                             return
                         }
                     }
                 }
 
-                // 2c) case-insensitive match
+                // 2c) case-insensitive
                 val lowerName = appName.lowercase()
                 for (info in resolveInfos) {
                     val label = info.loadLabel(pm).toString().lowercase()
@@ -174,7 +207,7 @@ class CommandExecutor(
                     }
                 }
 
-                // Strategy 3: fallback — search all installed apps (not just launcher ones)
+                // Strategy 3: search all installed apps
                 val allApps = pm.getInstalledApplications(0)
                 for (appInfo in allApps) {
                     val label = pm.getApplicationLabel(appInfo).toString()
@@ -188,8 +221,8 @@ class CommandExecutor(
                 }
 
                 val installed = resolveInfos.map { it.loadLabel(pm).toString() }.sorted()
-                Log.w(TAG, "找不到应用 '$appName'，已安装的启动器应用: ${installed.joinToString()}")
-                sendActionResult(requestId, false, "找不到应用: $appName (已搜索 ${resolveInfos.size} 个应用)")
+                Log.w(TAG, "找不到应用 '$appName'，已安装: ${installed.joinToString()}")
+                sendActionResult(requestId, false, "找不到应用: $appName")
             } else {
                 sendActionResult(requestId, false, "应用未安装: $packageName")
             }
@@ -206,13 +239,22 @@ class CommandExecutor(
         return true
     }
 
-    private fun sendScreenshotResult(requestId: String, success: Boolean, image: String = "", error: String = "") {
+    private fun sendScreenshotResult(
+        requestId: String,
+        success: Boolean,
+        image: String = "",
+        error: String = "",
+        width: Int = 0,
+        height: Int = 0
+    ) {
         val json = JSONObject().apply {
             put("type", "screenshot_result")
             put("request_id", requestId)
             put("success", success)
             if (image.isNotEmpty()) put("image", image)
             if (error.isNotEmpty()) put("error", error)
+            put("width", width)
+            put("height", height)
         }
         wsClient.send(json)
     }
@@ -226,5 +268,4 @@ class CommandExecutor(
         }
         wsClient.send(json)
     }
-
 }
