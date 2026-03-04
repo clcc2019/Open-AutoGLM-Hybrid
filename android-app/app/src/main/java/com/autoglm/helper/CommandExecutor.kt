@@ -117,13 +117,39 @@ class CommandExecutor(
     }
 
     private fun handleLaunchApp(command: JSONObject, requestId: String) {
-        val packageName = command.getString("package_name")
+        val packageName = command.optString("package_name", "")
+        val appName = command.optString("app_name", "")
+
         try {
-            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            if (intent != null) {
-                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-                sendActionResult(requestId, true)
+            // 1) Try package name directly
+            if (packageName.isNotEmpty()) {
+                val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+                if (intent != null) {
+                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    sendActionResult(requestId, true)
+                    return
+                }
+            }
+
+            // 2) Search by app label (display name)
+            if (appName.isNotEmpty()) {
+                val pm = context.packageManager
+                val packages = pm.getInstalledApplications(0)
+                for (appInfo in packages) {
+                    val label = pm.getApplicationLabel(appInfo).toString()
+                    if (label == appName || label.contains(appName) || appName.contains(label)) {
+                        val intent = pm.getLaunchIntentForPackage(appInfo.packageName)
+                        if (intent != null) {
+                            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                            Log.i(TAG, "通过应用名 '$appName' 找到: ${appInfo.packageName}")
+                            sendActionResult(requestId, true)
+                            return
+                        }
+                    }
+                }
+                sendActionResult(requestId, false, "找不到应用: $appName")
             } else {
                 sendActionResult(requestId, false, "应用未安装: $packageName")
             }

@@ -78,7 +78,8 @@ class HomeCommand(ServerMessage):
 
 class LaunchAppCommand(ServerMessage):
     type: ServerMessageType = ServerMessageType.LAUNCH_APP
-    package_name: str
+    package_name: str = ""
+    app_name: str = ""
 
 
 class TaskStarted(ServerMessage):

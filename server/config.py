@@ -12,7 +12,7 @@ class ServerConfig(BaseModel):
 
     zhipu_api_key: str = ""
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
-    zhipu_model: str = "glm-4v-plus"
+    zhipu_model: str = "autoglm-phone"
 
     heartbeat_interval: int = 30  # seconds
     heartbeat_timeout: int = 90
@@ -26,7 +26,7 @@ class ServerConfig(BaseModel):
             port=int(os.getenv("SERVER_PORT", "8000")),
             zhipu_api_key=os.getenv("ZHIPU_API_KEY", ""),
             zhipu_base_url=os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-            zhipu_model=os.getenv("ZHIPU_MODEL", "glm-4v-plus"),
+            zhipu_model=os.getenv("ZHIPU_MODEL", "autoglm-phone"),
             heartbeat_interval=int(os.getenv("HEARTBEAT_INTERVAL", "30")),
             heartbeat_timeout=int(os.getenv("HEARTBEAT_TIMEOUT", "90")),
             task_timeout=int(os.getenv("TASK_TIMEOUT", "300")),
