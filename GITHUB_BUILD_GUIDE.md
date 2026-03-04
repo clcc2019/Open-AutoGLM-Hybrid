@@ -141,6 +141,7 @@ git push
 
 2. **自动构建 Release APK**
    - GitHub Actions 会自动构建 Release 版本
+   - 如果配置了签名（见下方），APK 会自动签名
    - APK 会经过优化和混淆
 
 3. **创建 GitHub Release**
@@ -150,6 +151,49 @@ git push
    - 填写 Release 说明
    - 上传构建好的 APK
    - 点击 "Publish release"
+
+---
+
+## 🔐 配置 APK 签名（可选）
+
+### 为什么需要签名？
+
+- ✅ 应用商店要求（Google Play、华为应用市场等）
+- ✅ 应用更新需要相同签名
+- ✅ 提高应用安全性
+
+### 快速配置
+
+**详细步骤请参考**: [`docs/GITHUB_SIGNING_GUIDE.md`](../docs/GITHUB_SIGNING_GUIDE.md)
+
+**简要步骤：**
+
+1. **生成签名密钥**
+   ```bash
+   keytool -genkey -v -keystore autoglm-release.jks \
+     -alias autoglm -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+2. **转换为 Base64**
+   ```bash
+   base64 autoglm-release.jks
+   ```
+
+3. **在 GitHub 添加 Secrets**
+   - `KEYSTORE_BASE64`: Base64 编码的 keystore 文件
+   - `KEYSTORE_PASSWORD`: 密钥库密码
+   - `KEY_ALIAS`: 密钥别名（通常是 `autoglm`）
+   - `KEY_PASSWORD`: 密钥密码
+
+4. **触发构建**
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+构建完成后，下载的 APK 将是已签名的版本。
+
+**注意：** 如果不配置签名，Release APK 将未签名（仅用于测试）。
 
 ---
 
@@ -278,8 +322,12 @@ Artifacts 会占用存储空间:
 
 如果需要签名:
 - Settings → Secrets and variables → Actions
-- 添加 Secret: `KEYSTORE_PASSWORD`
-- 在工作流中使用: `${{ secrets.KEYSTORE_PASSWORD }}`
+- 添加以下 Secrets:
+  - `KEYSTORE_BASE64`: Base64 编码的 keystore 文件
+  - `KEYSTORE_PASSWORD`: 密钥库密码
+  - `KEY_ALIAS`: 密钥别名
+  - `KEY_PASSWORD`: 密钥密码
+- 详细配置请参考 [`docs/GITHUB_SIGNING_GUIDE.md`](../docs/GITHUB_SIGNING_GUIDE.md)
 
 ---
 

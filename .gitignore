@@ -25,6 +25,7 @@ captures/
 # Signing files
 *.jks
 *.keystore
+keystore_base64.txt
 
 # Python
 __pycache__/
