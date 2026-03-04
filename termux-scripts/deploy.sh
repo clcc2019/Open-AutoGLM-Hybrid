@@ -69,20 +69,25 @@ install_dependencies() {
     fi
     
     # 检查并安装 pip
-    if ! command -v pip &> /dev/null && ! python -m pip --version &> /dev/null; then
+    # Termux 中安装 Python 后，pip 可能不可用，需要使用 ensurepip 安装
+    if ! python -m pip --version &> /dev/null; then
         print_info "安装 pip..."
-        # Termux 中 pip 通常随 Python 一起安装，如果没有则尝试安装
-        pkg install python-pip -y || {
-            print_warning "无法通过 pkg 安装 pip，尝试使用 ensurepip..."
-            python -m ensurepip --upgrade || {
-                print_warning "ensurepip 失败，尝试手动安装 pip..."
-                curl https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-                python /tmp/get-pip.py
-                rm /tmp/get-pip.py
-            }
+        # 使用 ensurepip 安装 pip（Termux 推荐方式）
+        python -m ensurepip --upgrade --default-pip || {
+            print_warning "ensurepip 失败，尝试使用 get-pip.py..."
+            if command -v curl &> /dev/null; then
+                curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+                python /tmp/get-pip.py --user || python /tmp/get-pip.py
+                rm -f /tmp/get-pip.py
+            else
+                print_error "无法安装 pip：curl 不可用且 ensurepip 失败"
+                print_info "请手动运行: python -m ensurepip --upgrade"
+                exit 1
+            fi
         }
+        print_success "pip 安装完成"
     else
-        print_success "pip 已安装"
+        print_success "pip 已安装: $(python -m pip --version 2>&1 | head -1)"
     fi
     
     # 检查并安装 Git
@@ -99,16 +104,73 @@ install_dependencies() {
     print_success "必要软件安装完成"
 }
 
-# 获取 pip 命令
+# 获取 pip 命令（优先使用 python -m pip，在 Termux 中更可靠）
 get_pip_cmd() {
-    if python -m pip --version &> /dev/null; then
+    # 优先使用 python -m pip（Termux 推荐方式）
+    if python -m pip --version &> /dev/null 2>&1; then
         echo "python -m pip"
-    elif command -v pip &> /dev/null; then
+    # 回退到直接使用 pip 命令
+    elif command -v pip &> /dev/null 2>&1 && pip --version &> /dev/null 2>&1; then
         echo "pip"
     else
-        print_error "无法找到 pip，请检查 Python 安装"
+        print_error "无法找到 pip"
+        print_info "请确保已安装 Python，然后运行: python -m ensurepip --upgrade"
         exit 1
     fi
+}
+
+# 使用 pip 安装包（自动尝试多个镜像源）
+pip_install_with_mirrors() {
+    local install_args="$1"  # 安装参数，如 "pillow openai requests" 或 "-r requirements.txt" 或 "-e ."
+    local PIP_CMD="$2"
+    
+    # 定义多个镜像源（按优先级排序）
+    local mirrors=(
+        "https://pypi.tuna.tsinghua.edu.cn/simple"      # 清华
+        "https://mirrors.aliyun.com/pypi/simple"        # 阿里云
+        "https://pypi.mirrors.ustc.edu.cn/simple"       # 中科大
+        "https://pypi.douban.com/simple"                # 豆瓣
+        ""                                               # 默认源（最后尝试）
+    )
+    
+    local mirror_names=(
+        "清华镜像"
+        "阿里云镜像"
+        "中科大镜像"
+        "豆瓣镜像"
+        "默认源"
+    )
+    
+    # 尝试每个镜像源
+    for i in "${!mirrors[@]}"; do
+        local mirror="${mirrors[$i]}"
+        local mirror_name="${mirror_names[$i]}"
+        
+        if [ -z "$mirror" ]; then
+            # 默认源，不使用 -i 参数
+            print_info "尝试使用 ${mirror_name}..."
+            if $PIP_CMD install $install_args --timeout 30 --retries 2 2>&1; then
+                print_success "使用 ${mirror_name} 安装成功"
+                return 0
+            else
+                print_warning "${mirror_name} 失败，尝试下一个..."
+            fi
+        else
+            # 提取镜像源的主机名（用于 --trusted-host）
+            local host=$(echo "$mirror" | sed 's|https\?://||' | cut -d'/' -f1)
+            print_info "尝试使用 ${mirror_name}..."
+            if $PIP_CMD install $install_args -i "$mirror" --trusted-host "$host" --timeout 30 --retries 2 2>&1; then
+                print_success "使用 ${mirror_name} 安装成功"
+                return 0
+            else
+                print_warning "${mirror_name} 失败，尝试下一个..."
+            fi
+        fi
+    done
+    
+    # 所有镜像源都失败
+    print_error "所有镜像源都失败，无法安装: $install_args"
+    return 1
 }
 
 # 安装 Python 依赖
@@ -119,20 +181,21 @@ install_python_packages() {
     PIP_CMD=$(get_pip_cmd)
     print_info "使用命令: $PIP_CMD"
     
-    # 升级 pip
+    # 升级 pip（使用默认源，避免镜像源问题）
     print_info "升级 pip..."
-    $PIP_CMD install --upgrade pip || {
+    $PIP_CMD install --upgrade pip --timeout 30 || {
         print_warning "pip 升级失败，继续使用当前版本"
     }
     
-    # 安装依赖（使用国内镜像加速）
-    print_info "安装依赖包..."
-    $PIP_CMD install pillow openai requests -i https://pypi.tuna.tsinghua.edu.cn/simple || {
-        print_warning "使用清华镜像失败，尝试使用默认源..."
-        $PIP_CMD install pillow openai requests
-    }
-    
-    print_success "Python 依赖安装完成"
+    # 安装依赖（自动尝试多个镜像源）
+    print_info "安装依赖包: pillow openai requests"
+    if pip_install_with_mirrors "pillow openai requests" "$PIP_CMD"; then
+        print_success "Python 依赖安装完成"
+    else
+        print_error "Python 依赖安装失败"
+        print_info "请检查网络连接或手动安装: $PIP_CMD install pillow openai requests"
+        exit 1
+    fi
 }
 
 # 下载 Open-AutoGLM
@@ -168,19 +231,25 @@ install_autoglm() {
     
     # 安装项目依赖
     if [ -f "requirements.txt" ]; then
-        print_info "安装项目依赖..."
-        $PIP_CMD install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || {
-            print_warning "使用清华镜像失败，尝试使用默认源..."
-            $PIP_CMD install -r requirements.txt
-        }
+        print_info "安装项目依赖 (requirements.txt)..."
+        if pip_install_with_mirrors "-r requirements.txt" "$PIP_CMD"; then
+            print_success "项目依赖安装完成"
+        else
+            print_warning "项目依赖安装失败，继续安装 phone_agent..."
+        fi
     fi
     
     # 安装 phone_agent
-    print_info "安装 phone_agent..."
-    $PIP_CMD install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple || {
-        print_warning "使用清华镜像失败，尝试使用默认源..."
-        $PIP_CMD install -e .
-    }
+    print_info "安装 phone_agent (开发模式)..."
+    if pip_install_with_mirrors "-e ." "$PIP_CMD"; then
+        print_success "phone_agent 安装完成"
+    else
+        print_error "phone_agent 安装失败"
+        print_info "请检查网络连接或手动安装:"
+        print_info "  cd ~/Open-AutoGLM"
+        print_info "  $PIP_CMD install -e ."
+        exit 1
+    fi
     
     print_success "Open-AutoGLM 安装完成"
 }
