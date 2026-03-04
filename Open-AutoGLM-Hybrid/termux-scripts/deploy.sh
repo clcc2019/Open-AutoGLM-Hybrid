@@ -5,6 +5,9 @@
 
 set -e
 
+# 获取脚本所在目录（即本地代码目录）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -69,16 +72,8 @@ install_dependencies() {
         print_success "Python 已安装: $(python --version)"
     fi
     
-    # 检查并安装 Git
-    if ! command -v git &> /dev/null; then
-        print_info "安装 Git..."
-        pkg install git -y
-    else
-        print_success "Git 已安装: $(git --version)"
-    fi
-    
     # 安装其他工具
-    pkg install curl wget -y
+    pkg install curl -y
     
     print_success "必要软件安装完成"
 }
@@ -86,67 +81,32 @@ install_dependencies() {
 # 安装 Python 依赖
 install_python_packages() {
     print_info "安装 Python 依赖包..."
-    
-    
-    # 安装依赖（支持 OpenAI 兼容 + 智谱 AI）
-    pip install pillow openai zhipuai requests -i https://pypi.tuna.tsinghua.edu.cn/simple
-    
+
+    if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+        pip install -r "$SCRIPT_DIR/requirements.txt" -i https://pypi.tuna.tsinghua.edu.cn/simple
+    else
+        pip install pillow openai zhipuai requests -i https://pypi.tuna.tsinghua.edu.cn/simple
+    fi
+
     print_success "Python 依赖安装完成"
 }
 
-# 下载 Open-AutoGLM
-download_autoglm() {
-    print_info "下载 Open-AutoGLM 项目..."
-    
-    cd ~
-    
-    if [ -d "Open-AutoGLM" ]; then
-        print_warning "Open-AutoGLM 目录已存在"
-        read -p "是否删除并重新下载? (y/n): " confirm
-        if [ "$confirm" = "y" ]; then
-            rm -rf Open-AutoGLM
-        else
-            print_info "跳过下载，使用现有目录"
-            return
-        fi
-    fi
-    
-    git clone https://github.com/zai-org/Open-AutoGLM.git
-    
-    print_success "Open-AutoGLM 下载完成"
-}
+# 安装混合方案脚本（从本地复制）
+install_hybrid_scripts() {
+    print_info "安装混合方案脚本..."
 
-# 安装 Open-AutoGLM
-install_autoglm() {
-    print_info "安装 Open-AutoGLM..."
-    
-    cd ~/Open-AutoGLM
-    
-    # 安装项目依赖
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    fi
-    
-    # 安装 phone_agent
-    pip install -e .
-    
-    print_success "Open-AutoGLM 安装完成"
-}
-
-# 下载混合方案脚本
-download_hybrid_scripts() {
-    print_info "下载混合方案脚本..."
-
-    cd ~
-
-    # 创建目录
     mkdir -p ~/.autoglm
 
-    # 下载脚本文件到 ~/.autoglm/
-    # 注意: 这里需要替换为实际的下载链接
-    # for f in phone_controller.py ai_client.py config.py main.py requirements.txt; do
-    #     wget -O ~/.autoglm/$f https://your-link/$f
-    # done
+    # 从脚本所在目录复制 Python 源文件
+    for f in main.py ai_client.py phone_controller.py config.py requirements.txt; do
+        if [ -f "$SCRIPT_DIR/$f" ]; then
+            cp "$SCRIPT_DIR/$f" ~/.autoglm/
+        else
+            print_warning "未找到 $f，跳过"
+        fi
+    done
+
+    print_success "混合方案脚本安装完成 -> ~/.autoglm/"
 
     # 放置示例配置文件
     cat > ~/.autoglm/config.example.ini << 'EXAMPLE_EOF'
@@ -201,7 +161,6 @@ url = http://localhost:8080
 mode = auto
 EXAMPLE_EOF
 
-    print_success "混合方案脚本下载完成"
     print_info "示例配置已放置: ~/.autoglm/config.example.ini"
 }
 
@@ -464,9 +423,7 @@ main() {
     update_packages
     install_dependencies
     install_python_packages
-    download_autoglm
-    install_autoglm
-    download_hybrid_scripts
+    install_hybrid_scripts
     configure_ai_service
     create_launcher
     check_helper_app
