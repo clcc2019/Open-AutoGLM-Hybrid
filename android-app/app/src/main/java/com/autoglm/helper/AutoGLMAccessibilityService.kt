@@ -25,6 +25,8 @@ class AutoGLMAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "AutoGLM-Service"
         const val PORT = 8080
+        private const val MAX_WIDTH = 720
+        private const val JPEG_QUALITY = 80
 
         @Volatile
         private var instance: AutoGLMAccessibilityService? = null
@@ -97,7 +99,7 @@ class AutoGLMAccessibilityService : AccessibilityService() {
                 }
             }, null)
 
-            latch.await(5, TimeUnit.SECONDS)
+            latch.await(2, TimeUnit.SECONDS)
             Log.d(TAG, "Tap at ($x, $y): $success")
             success
         } catch (e: Exception) {
@@ -169,7 +171,7 @@ class AutoGLMAccessibilityService : AccessibilityService() {
                 }
             }, null)
 
-            latch.await(10, TimeUnit.SECONDS)
+            latch.await(5, TimeUnit.SECONDS)
             Log.d(TAG, "Swipe from ($x1, $y1) to ($x2, $y2) duration=$duration: $success")
             success
         } catch (e: Exception) {
@@ -204,7 +206,7 @@ class AutoGLMAccessibilityService : AccessibilityService() {
             val editableNode = findAnyEditText(rootNode)
             if (editableNode != null) {
                 editableNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                Thread.sleep(100)
+                Thread.sleep(50)
                 val args = Bundle()
                 args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
                 val success = editableNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
@@ -234,7 +236,7 @@ class AutoGLMAccessibilityService : AccessibilityService() {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("autoglm_input", text)
             clipboard.setPrimaryClip(clip)
-            Thread.sleep(100)
+            Thread.sleep(50)
 
             val rootNode = rootInActiveWindow ?: return false
 
@@ -303,8 +305,9 @@ class AutoGLMAccessibilityService : AccessibilityService() {
     )
 
     /**
-     * 截取屏幕并返回 Base64 编码的 PNG 图片 + 屏幕尺寸。
-     * 使用 PNG 格式与 Open-AutoGLM 保持一致。
+     * 截取屏幕并返回 Base64 编码图片 + 原始屏幕尺寸。
+     * 图片缩小到 MAX_WIDTH 宽度并用 JPEG 压缩以加快网络传输。
+     * 返回的 width/height 是原始屏幕尺寸（用于坐标转换）。
      */
     fun takeScreenshotWithSize(): ScreenshotData? {
         return try {
@@ -330,20 +333,33 @@ class AutoGLMAccessibilityService : AccessibilityService() {
                     }
                 )
 
-                latch.await(5, TimeUnit.SECONDS)
+                latch.await(3, TimeUnit.SECONDS)
 
                 if (bitmap != null) {
                     val bmp = bitmap!!
-                    val width = bmp.width
-                    val height = bmp.height
+                    val origWidth = bmp.width
+                    val origHeight = bmp.height
+
+                    val scaledBmp = if (origWidth > MAX_WIDTH) {
+                        val scale = MAX_WIDTH.toFloat() / origWidth
+                        val newH = (origHeight * scale).toInt()
+                        Bitmap.createScaledBitmap(bmp, MAX_WIDTH, newH, true).also {
+                            bmp.recycle()
+                        }
+                    } else {
+                        bmp
+                    }
+
                     val outputStream = ByteArrayOutputStream()
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                    scaledBmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
                     val bytes = outputStream.toByteArray()
-                    bmp.recycle()
+                    scaledBmp.recycle()
+
+                    Log.d(TAG, "Screenshot: ${origWidth}x${origHeight} -> ${bytes.size / 1024}KB JPEG")
                     ScreenshotData(
                         base64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
-                        width = width,
-                        height = height
+                        width = origWidth,
+                        height = origHeight
                     )
                 } else {
                     null
@@ -356,10 +372,5 @@ class AutoGLMAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Failed to take screenshot", e)
             null
         }
-    }
-
-    @Deprecated("Use takeScreenshotWithSize() instead")
-    fun takeScreenshotBase64(): String? {
-        return takeScreenshotWithSize()?.base64
     }
 }

@@ -175,11 +175,10 @@ class PhoneAgent:
             else:
                 text_content = f"** Screen Info **\n{screen_info}"
 
-            # Open-AutoGLM 的消息顺序：先图片，后文本
             user_content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{screenshot_resp.image}"
+                    "url": f"data:image/jpeg;base64,{screenshot_resp.image}"
                 },
             })
             user_content.append({"type": "text", "text": text_content})
@@ -255,7 +254,7 @@ class PhoneAgent:
                     context.append({"role": "user", "content": "已经等待多次，请尝试其他操作。"})
                     consecutive_wait = 0
                 else:
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                 continue
             else:
                 consecutive_wait = 0
@@ -283,7 +282,13 @@ class PhoneAgent:
                     "content": f"操作 {action_name} 执行失败: {error_msg}。请尝试其他方式。"
                 })
 
-            await asyncio.sleep(1.5)
+            # 等待 UI 响应：Launch 需要更长时间，其他操作短等待即可
+            if action_name == "Launch":
+                await asyncio.sleep(2.0)
+            elif action_name == "Type":
+                await asyncio.sleep(0.5)
+            else:
+                await asyncio.sleep(0.8)
 
         await send_to_device(TaskFailed(
             task_id=task_id,
