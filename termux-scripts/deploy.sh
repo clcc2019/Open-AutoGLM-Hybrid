@@ -208,7 +208,12 @@ install_python_packages() {
     
     # 单独安装 Pillow（需要特殊处理）
     print_info "安装 Pillow（图像处理库）..."
-    print_info "注意: Pillow 可能需要编译，这可能需要几分钟..."
+    
+    # 诊断信息
+    print_info "系统信息:"
+    print_info "  Python 版本: $(python --version 2>&1)"
+    print_info "  pip 版本: $($PIP_CMD --version 2>&1 | head -1)"
+    print_info "  架构: $(uname -m)"
     
     # 设置 Termux 环境变量帮助 Pillow 找到库文件
     if [ -z "$PREFIX" ]; then
@@ -218,31 +223,45 @@ install_python_packages() {
     export CPPFLAGS="-I$PREFIX/include"
     export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
     
-    # 尝试安装 Pillow（优先使用预编译的 wheel）
-    print_info "尝试使用预编译包安装 Pillow..."
-    local pillow_installed=false
+    # Termux 中通常没有预编译的 Pillow wheel，直接从源码编译
+    print_info "注意: Termux 中 Pillow 需要从源码编译，这可能需要 5-10 分钟..."
+    print_info "请确保设备有足够的电量和存储空间..."
     
-    # 方法1: 使用镜像源安装预编译包
-    if pip_install_with_mirrors "pillow" "$PIP_CMD"; then
-        print_success "Pillow 安装完成（预编译包）"
+    # 确保编译工具已安装
+    if ! command -v clang &> /dev/null; then
+        print_info "安装编译工具..."
+        pkg install clang make -y
+    fi
+    
+    # 检查是否已安装 Pillow
+    if python -c "import PIL" 2>/dev/null; then
+        print_success "Pillow 已安装: $(python -c 'import PIL; print(PIL.__version__)' 2>/dev/null)"
         pillow_installed=true
     else
-        print_warning "预编译包安装失败，尝试其他方法..."
+        pillow_installed=false
         
-        # 方法2: 使用默认源安装预编译包
-        print_info "尝试使用默认源安装预编译包..."
-        if $PIP_CMD install pillow --timeout 60 --retries 3 2>&1; then
-            print_success "Pillow 安装完成（默认源预编译包）"
+        # 直接使用 --no-binary 从源码编译（Termux 推荐方式）
+        print_info "从源码编译 Pillow..."
+        print_info "这可能需要 5-10 分钟，请耐心等待..."
+        
+        # 使用 --no-binary pillow 强制从源码编译
+        if $PIP_CMD install pillow --no-binary pillow --timeout 600 2>&1; then
+            print_success "Pillow 从源码编译安装完成"
             pillow_installed=true
         else
-            print_warning "默认源预编译包也失败，尝试从源码编译..."
-            
-            # 方法3: 从源码编译（最后手段）
-            print_info "从源码编译 Pillow（这可能需要 5-10 分钟）..."
-            if $PIP_CMD install pillow --no-binary :all: --timeout 600 2>&1; then
-                print_success "Pillow 从源码编译安装完成"
-                pillow_installed=true
-            fi
+            print_error "从源码编译失败"
+            print_info ""
+            print_info "常见问题和解决方案:"
+            print_info "1. 缺少编译依赖，运行:"
+            print_info "   pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
+            print_info ""
+            print_info "2. 磁盘空间不足，清理缓存:"
+            print_info "   pip cache purge"
+            print_info ""
+            print_info "3. 手动安装（使用详细输出）:"
+            print_info "   export LDFLAGS=\"-L\$PREFIX/lib\""
+            print_info "   export CPPFLAGS=\"-I\$PREFIX/include\""
+            print_info "   $PIP_CMD install pillow --no-binary pillow -v"
         fi
     fi
     
