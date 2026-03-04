@@ -211,8 +211,10 @@ class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8
     }
 
     private fun getRequestBody(session: IHTTPSession): String {
-        val map = HashMap<String, String>()
-        session.parseBody(map)
-        return map["postData"] ?: ""
+        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
+        if (contentLength <= 0) return ""
+        val buf = ByteArray(contentLength)
+        session.inputStream.read(buf, 0, contentLength)
+        return String(buf, Charsets.UTF_8)
     }
 }

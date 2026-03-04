@@ -3,6 +3,7 @@ package com.autoglm.helper
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.os.Build
@@ -222,17 +223,35 @@ class AutoGLMAccessibilityService : AccessibilityService() {
 
     /**
      * 通过包名启动应用
+     * 先尝试 getLaunchIntentForPackage；若为 null（如闲鱼等部分应用），则查询 MAIN/LAUNCHER 并显式启动
      */
     fun launchAppByPackage(packageName: String): Boolean {
         return try {
-            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            var intent = packageManager.getLaunchIntentForPackage(packageName)
+            if (intent == null) {
+                // 部分应用不通过 getLaunchIntentForPackage 暴露，用 MAIN+LAUNCHER 查询后显式启动
+                val mainIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    setPackage(packageName)
+                }
+                @Suppress("DEPRECATION")
+                val list = packageManager.queryIntentActivities(mainIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                if (list.isNotEmpty()) {
+                    val ai = list[0].activityInfo
+                    intent = Intent(Intent.ACTION_MAIN).apply {
+                        setClassName(ai.packageName, ai.name)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    Log.d(TAG, "Launched app via launcher activity: $packageName / ${ai.name}")
+                }
+            }
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 Log.d(TAG, "Launched app: $packageName")
                 true
             } else {
-                Log.w(TAG, "Cannot launch app, package not found: $packageName")
+                Log.w(TAG, "Cannot launch app, no launcher intent: $packageName")
                 false
             }
         } catch (e: Exception) {

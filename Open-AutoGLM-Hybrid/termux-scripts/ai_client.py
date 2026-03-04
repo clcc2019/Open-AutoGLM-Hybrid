@@ -3,16 +3,13 @@
 
 两种 provider:
   - openai: 任何兼容 OpenAI Chat Completions API 的服务
-            (OpenAI / Azure / DeepSeek / Moonshot / 本地 Ollama 等)
-  - zhipu:  智谱 AI，使用官方 zhipuai SDK（支持 GLM-4V 视觉模型）
+  - zhipu:  智谱 AI（支持 autoglm-phone / GLM-4V 等模型）
 
-思考模式:
-  config.thinking = true 时，自动适配:
-  - OpenAI o-系列: 读取 message.reasoning_content
-  - DeepSeek-R1 等: 剥离 <think>...</think> 标签
-  - 通用: 先尝试 reasoning_content 字段，再 fallback 到 <think> 标签
+autoglm-phone 模型输出 do(action="...", ...) 格式，使用 AST 解析。
+其他模型输出 JSON 格式。
 """
 
+import ast
 import base64
 import json
 import logging
@@ -30,15 +27,15 @@ from config import AIConfig
 logger = logging.getLogger('AIClient')
 
 MAX_RETRIES = 3
-RETRY_DELAY = 2  # 秒
+RETRY_DELAY = 2
 
 
 # ── 动作数据结构 ──────────────────────────────────────────────
 
 class Action:
-    """AI 返回的操作指令"""
-
     TYPE_TAP = "tap"
+    TYPE_LONG_PRESS = "long_press"
+    TYPE_DOUBLE_TAP = "double_tap"
     TYPE_SWIPE = "swipe"
     TYPE_INPUT = "input"
     TYPE_LAUNCH_APP = "launch_app"
@@ -46,11 +43,13 @@ class Action:
     TYPE_HOME = "home"
     TYPE_WAIT = "wait"
     TYPE_DONE = "done"
+    TYPE_TAKE_OVER = "take_over"
     TYPE_UNKNOWN = "unknown"
 
     def __init__(self, action_type: str, **kwargs):
         self.action_type = action_type
         self.params = kwargs
+        self.normalized_coords = False
 
     def __repr__(self):
         return f"Action({self.action_type}, {self.params})"
@@ -58,83 +57,85 @@ class Action:
 
 @dataclass
 class AIResponse:
-    """AI 回复，包含思考过程和最终内容"""
     content: str
     thinking: str = ""
 
 
-# ── System Prompt ─────────────────────────────────────────────
+# ── System Prompt (仅用于非 autoglm-phone 模型) ──────────────
 
-SYSTEM_PROMPT = """你是一个手机操作助手。用户会给你一张手机截图和一个任务描述。
+SYSTEM_PROMPT_GENERIC = """你是一个手机操作助手。用户会给你一张手机截图和一个任务描述。
 你需要分析截图内容，决定下一步操作。
 
-请以 JSON 格式返回操作指令，格式如下:
-- 打开应用: {"action": "launch_app", "app_name": "淘宝", "reason": "打开淘宝"}
-  支持的应用名: 淘宝/闲鱼/京东/微信/支付宝/抖音/快手/微博/小红书/美团/饿了么/拼多多/高德地图/百度地图/QQ/哔哩哔哩/B站/QQ音乐/网易云音乐
-  也可以用包名: {"action": "launch_app", "package_name": "com.example.app", "reason": "打开应用"}
-- 点击: {"action": "tap", "x": 500, "y": 800, "reason": "点击搜索框"}
-- 滑动: {"action": "swipe", "x1": 500, "y1": 1500, "x2": 500, "y2": 500, "reason": "向上滑动"}
-- 输入: {"action": "input", "text": "蓝牙耳机", "reason": "输入搜索关键词"}
-- 返回: {"action": "back", "reason": "返回上一页"}
-- 回到桌面: {"action": "home", "reason": "回到桌面"}
-- 等待: {"action": "wait", "seconds": 2, "reason": "等待页面加载"}
-- 完成: {"action": "done", "reason": "任务已完成"}
+每次只输出一个操作指令（JSON 格式）:
+{"action": "launch_app", "app_name": "淘宝", "reason": "打开淘宝"}
+{"action": "tap", "x": 500, "y": 800, "reason": "点击搜索框"}
+{"action": "swipe", "x1": 500, "y1": 1500, "x2": 500, "y2": 500, "reason": "向上滑动"}
+{"action": "input", "text": "蓝牙耳机", "reason": "输入搜索关键词"}
+{"action": "back", "reason": "返回上一页"}
+{"action": "home", "reason": "回到桌面"}
+{"action": "wait", "seconds": 2, "reason": "等待页面加载"}
+{"action": "done", "reason": "任务已完成"}
 
-重要规则:
-- 如果任务要求打开某个应用，优先使用 launch_app 而不是在桌面上找图标点击
-- 只返回一个 JSON 对象，不要返回其他内容"""
+规则:
+- 如果任务要求打开某个应用，优先使用 launch_app
+- 每次只返回一个操作"""
+
+# autoglm-phone 模型自带行为规则，不需要自定义 prompt
+AUTOGLM_PHONE_MODELS = {"autoglm-phone"}
 
 
 # ── 基类 ──────────────────────────────────────────────────────
 
 class BaseAIClient(ABC):
-    """AI 客户端基类"""
 
     def __init__(self, config: AIConfig):
         self.config = config
+        self._is_autoglm_phone = config.model.lower() in AUTOGLM_PHONE_MODELS
 
     @abstractmethod
     def _call_api(self, messages: list) -> AIResponse:
-        """调用模型 API，返回 AIResponse"""
         ...
 
     def decide_action(self, task: str, image: Image.Image,
                       history: Optional[list] = None) -> tuple[Action, str]:
-        """
-        根据截图和任务决定下一步操作
-
-        Returns:
-            (action, thinking_text)
-        """
         b64 = self._image_to_base64(image)
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = []
+        if not self._is_autoglm_phone:
+            messages.append({"role": "system", "content": SYSTEM_PROMPT_GENERIC})
         if history:
             messages.extend(history)
 
         messages.append({
             "role": "user",
             "content": [
-                {"type": "text", "text": f"任务: {task}"},
+                {"type": "text", "text": task},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{b64}",
-                    },
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                 },
             ],
         })
 
         resp = self._call_with_retry(messages)
-        logger.debug(f"模型返回 content: {resp.content[:300]}")
+        logger.debug(f"模型原始返回: {resp.content[:500]}")
         if resp.thinking:
-            logger.debug(f"模型思考过程: {resp.thinking[:300]}")
+            logger.debug(f"模型思考: {resp.thinking[:300]}")
 
-        action = self._parse_action(resp.content)
-        return action, resp.thinking
+        content = resp.content
+        thinking = resp.thinking
+
+        if self._is_autoglm_phone:
+            action_text, auto_thinking = self._split_autoglm_response(content)
+            if not thinking:
+                thinking = auto_thinking
+            action = self._parse_autoglm_action(action_text)
+        else:
+            action = self._parse_json_action(content)
+
+        return action, thinking
 
     def _call_with_retry(self, messages: list) -> AIResponse:
-        """带重试的 API 调用"""
         last_err = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -156,7 +157,6 @@ class BaseAIClient(ABC):
             ratio = max_size / max(w, h)
             image = image.resize((int(w * ratio), int(h * ratio)),
                                  Image.LANCZOS)
-
         buf = BytesIO()
         if image.mode == 'RGBA':
             image = image.convert('RGB')
@@ -165,25 +165,197 @@ class BaseAIClient(ABC):
 
     @staticmethod
     def _strip_think_tags(text: str) -> tuple[str, str]:
-        """
-        分离 <think>...</think> 标签中的思考内容和正式回复
-        Returns: (content, thinking)
-        """
         pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
         thinking_parts = pattern.findall(text)
         thinking = "\n".join(thinking_parts).strip()
         content = pattern.sub('', text).strip()
         return content, thinking
 
+    # ── autoglm-phone 响应解析 ────────────────────────────────
+
     @staticmethod
-    def _parse_action(raw: str) -> Action:
-        """从模型回复中提取 JSON 并解析为 Action"""
-        # 移除模型可能包裹的 XML 标签（如 <answer>...</answer>、<output>...</output>）
+    def _split_autoglm_response(content: str) -> tuple[str, str]:
+        """
+        从 autoglm-phone 的响应中分离 thinking 和 action。
+        模型输出格式: <思考文本> do(action="...", ...) 或 finish(message="...")
+        也可能用 <answer>...</answer> 包裹。
+        """
+        # 尝试 <answer> 标签
+        m = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
+        if m:
+            thinking = content[:m.start()].strip()
+            action_text = m.group(1).strip()
+            return action_text, thinking
+
+        # 尝试 finish(message= 标记
+        idx = content.find('finish(message=')
+        if idx >= 0:
+            thinking = content[:idx].strip()
+            action_text = content[idx:].strip()
+            return action_text, thinking
+
+        # 尝试 do(action= 标记
+        idx = content.find('do(action=')
+        if idx >= 0:
+            thinking = content[:idx].strip()
+            action_text = content[idx:].strip()
+            # 找到对应的右括号
+            paren_depth = 0
+            for i, ch in enumerate(action_text):
+                if ch == '(':
+                    paren_depth += 1
+                elif ch == ')':
+                    paren_depth -= 1
+                    if paren_depth == 0:
+                        action_text = action_text[:i + 1]
+                        break
+            return action_text, thinking
+
+        return content, ""
+
+    @classmethod
+    def _parse_autoglm_action(cls, text: str) -> Action:
+        """解析 autoglm-phone 格式: do(action="...", ...) 或 finish(message="...")"""
+        text = text.strip()
+
+        # finish(message="...")
+        if text.startswith('finish'):
+            m = re.search(r'finish\s*\(\s*message\s*=\s*["\'](.+?)["\']', text, re.DOTALL)
+            msg = m.group(1) if m else ""
+            return Action(Action.TYPE_DONE, reason=msg)
+
+        # do(action="...", ...)
+        if not text.startswith('do'):
+            logger.warning(f"autoglm-phone 无法解析: {text[:200]}")
+            return Action(Action.TYPE_UNKNOWN, raw=text)
+
+        try:
+            data = cls._ast_parse_do(text)
+        except Exception as e:
+            logger.warning(f"AST 解析 do() 失败: {e}, 原文: {text[:200]}")
+            return Action(Action.TYPE_UNKNOWN, raw=text)
+
+        return cls._build_autoglm_action(data)
+
+    @staticmethod
+    def _ast_parse_do(text: str) -> dict:
+        """用 Python AST 解析 do(action="...", ...) 调用"""
+        # Type/Type_Name 的 text 参数可能包含特殊字符，特殊处理
+        if text.startswith('do(action="Type"') or text.startswith('do(action="Type_Name"'):
+            parts = text.split("text=", 1)
+            if len(parts) == 2:
+                raw_text = parts[1].strip()
+                if raw_text.endswith(')'):
+                    raw_text = raw_text[:-1]
+                raw_text = raw_text.strip('"\'')
+                return {"action": "Type", "text": raw_text}
+
+        sanitized = text.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        tree = ast.parse(sanitized, mode="eval")
+        call = tree.body
+        data = {}
+        for keyword in call.keywords:
+            key = keyword.arg
+            value = ast.literal_eval(keyword.value)
+            data[key] = value
+        return data
+
+    # autoglm-phone action 名称映射
+    _AUTOGLM_ACTION_MAP = {
+        "Launch":      Action.TYPE_LAUNCH_APP,
+        "Tap":         Action.TYPE_TAP,
+        "Type":        Action.TYPE_INPUT,
+        "Type_Name":   Action.TYPE_INPUT,
+        "Swipe":       Action.TYPE_SWIPE,
+        "Back":        Action.TYPE_BACK,
+        "Home":        Action.TYPE_HOME,
+        "Wait":        Action.TYPE_WAIT,
+        "Long Press":  Action.TYPE_LONG_PRESS,
+        "Double Tap":  Action.TYPE_DOUBLE_TAP,
+        "Take_over":   Action.TYPE_TAKE_OVER,
+        "Note":        Action.TYPE_UNKNOWN,
+        "Call_API":    Action.TYPE_UNKNOWN,
+        "Interact":    Action.TYPE_UNKNOWN,
+    }
+
+    @classmethod
+    def _build_autoglm_action(cls, data: dict) -> Action:
+        """从 AST 解析结果构建 Action（autoglm-phone 格式）"""
+        action_name = data.get("action", "")
+        action_type = cls._AUTOGLM_ACTION_MAP.get(action_name, Action.TYPE_UNKNOWN)
+
+        if action_type == Action.TYPE_LAUNCH_APP:
+            a = Action(action_type, app_name=data.get("app", ""))
+            return a
+
+        if action_type in (Action.TYPE_TAP, Action.TYPE_LONG_PRESS, Action.TYPE_DOUBLE_TAP):
+            element = data.get("element", [0, 0])
+            if isinstance(element, (list, tuple)) and len(element) >= 2:
+                x, y = int(element[0]), int(element[1])
+            else:
+                x, y = 0, 0
+            a = Action(action_type, x=x, y=y,
+                       reason=data.get("message", ""))
+            a.normalized_coords = True  # 0-999 归一化坐标
+            return a
+
+        if action_type == Action.TYPE_SWIPE:
+            start = data.get("start", [0, 0])
+            end = data.get("end", [0, 0])
+            a = Action(action_type,
+                       x1=int(start[0]), y1=int(start[1]),
+                       x2=int(end[0]), y2=int(end[1]))
+            a.normalized_coords = True
+            return a
+
+        if action_type == Action.TYPE_INPUT:
+            return Action(action_type, text=data.get("text", ""))
+
+        if action_type == Action.TYPE_WAIT:
+            dur = data.get("duration", "2")
+            secs = 2
+            m = re.search(r'(\d+)', str(dur))
+            if m:
+                secs = int(m.group(1))
+            return Action(action_type, seconds=secs)
+
+        if action_type == Action.TYPE_TAKE_OVER:
+            return Action(action_type, reason=data.get("message", ""))
+
+        if action_type in (Action.TYPE_BACK, Action.TYPE_HOME):
+            return Action(action_type)
+
+        if action_type == Action.TYPE_DONE:
+            return Action(action_type, reason=data.get("message", ""))
+
+        return Action(Action.TYPE_UNKNOWN, raw=str(data))
+
+    # ── 通用 JSON 格式解析 (GPT-4o / GLM-4V 等) ──────────────
+
+    _GENERIC_ACTION_MAP = {
+        "launch_app": Action.TYPE_LAUNCH_APP,
+        "launch":     Action.TYPE_LAUNCH_APP,
+        "tap":        Action.TYPE_TAP,
+        "click":      Action.TYPE_TAP,
+        "swipe":      Action.TYPE_SWIPE,
+        "input":      Action.TYPE_INPUT,
+        "type":       Action.TYPE_INPUT,
+        "back":       Action.TYPE_BACK,
+        "home":       Action.TYPE_HOME,
+        "wait":       Action.TYPE_WAIT,
+        "done":       Action.TYPE_DONE,
+        "finish":     Action.TYPE_DONE,
+    }
+
+    @classmethod
+    def _parse_json_action(cls, raw: str) -> Action:
+        """解析 JSON 格式的动作（通用模型）"""
         raw = re.sub(r'</?(?:answer|output|response|result|json)>', '', raw).strip()
 
-        json_match = None
+        # 提取第一个 JSON 对象
         depth = 0
         start = -1
+        json_match = None
         for i, ch in enumerate(raw):
             if ch == '{':
                 if depth == 0:
@@ -196,46 +368,42 @@ class BaseAIClient(ABC):
                     break
 
         if not json_match:
-            logger.warning(f"无法从模型回复中提取 JSON: {raw[:200]}")
+            logger.warning(f"JSON 解析: 未找到 JSON 对象: {raw[:200]}")
             return Action(Action.TYPE_UNKNOWN, raw=raw)
 
         try:
             data = json.loads(json_match)
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON 解析失败: {e}, 原文: {json_match[:200]}")
+            logger.warning(f"JSON 解析失败: {e}")
             return Action(Action.TYPE_UNKNOWN, raw=raw)
 
-        action_type = data.get('action', 'unknown')
+        action_str = data.get('action', 'unknown').lower()
+        action_type = cls._GENERIC_ACTION_MAP.get(action_str, Action.TYPE_UNKNOWN)
         reason = data.get('reason', '')
 
         try:
-            if action_type == 'launch_app':
-                return Action(Action.TYPE_LAUNCH_APP,
+            if action_type == Action.TYPE_LAUNCH_APP:
+                return Action(action_type,
                               app_name=data.get('app_name', ''),
                               package_name=data.get('package_name', ''),
                               reason=reason)
-            elif action_type == 'tap':
-                return Action(Action.TYPE_TAP,
+            elif action_type == Action.TYPE_TAP:
+                return Action(action_type,
                               x=int(data['x']), y=int(data['y']),
                               reason=reason)
-            elif action_type == 'swipe':
-                return Action(Action.TYPE_SWIPE,
+            elif action_type == Action.TYPE_SWIPE:
+                return Action(action_type,
                               x1=int(data['x1']), y1=int(data['y1']),
                               x2=int(data['x2']), y2=int(data['y2']),
                               reason=reason)
-            elif action_type == 'input':
-                return Action(Action.TYPE_INPUT,
+            elif action_type == Action.TYPE_INPUT:
+                return Action(action_type,
                               text=str(data.get('text', '')), reason=reason)
-            elif action_type == 'back':
-                return Action(Action.TYPE_BACK, reason=reason)
-            elif action_type == 'home':
-                return Action(Action.TYPE_HOME, reason=reason)
-            elif action_type == 'wait':
-                return Action(Action.TYPE_WAIT,
-                              seconds=int(data.get('seconds', 2)),
-                              reason=reason)
-            elif action_type == 'done':
-                return Action(Action.TYPE_DONE, reason=reason)
+            elif action_type == Action.TYPE_WAIT:
+                return Action(action_type,
+                              seconds=int(data.get('seconds', 2)), reason=reason)
+            elif action_type in (Action.TYPE_BACK, Action.TYPE_HOME, Action.TYPE_DONE):
+                return Action(action_type, reason=reason)
             else:
                 return Action(Action.TYPE_UNKNOWN, raw=raw)
         except (KeyError, ValueError, TypeError) as e:
@@ -246,10 +414,6 @@ class BaseAIClient(ABC):
 # ── OpenAI 兼容客户端 ────────────────────────────────────────
 
 class OpenAIClient(BaseAIClient):
-    """
-    适用于所有兼容 OpenAI Chat Completions API 的服务:
-    OpenAI / Azure / DeepSeek / Moonshot / Ollama / vLLM 等
-    """
 
     def __init__(self, config: AIConfig):
         super().__init__(config)
@@ -258,9 +422,8 @@ class OpenAIClient(BaseAIClient):
             api_key=config.api_key,
             base_url=config.base_url,
         )
-        logger.info(f"OpenAI 兼容客户端已初始化 "
-                     f"(base_url={config.base_url}, model={config.model}, "
-                     f"thinking={config.thinking})")
+        logger.info(f"OpenAI 客户端: base_url={config.base_url}, "
+                     f"model={config.model}")
 
     def _call_api(self, messages: list) -> AIResponse:
         kwargs = dict(
@@ -270,8 +433,6 @@ class OpenAIClient(BaseAIClient):
         )
 
         if self.config.thinking:
-            # o-系列等推理模型不支持 temperature / system role
-            # 将 system 消息转为 user 消息
             for msg in kwargs['messages']:
                 if msg['role'] == 'system':
                     msg['role'] = 'user'
@@ -284,12 +445,10 @@ class OpenAIClient(BaseAIClient):
         content = msg.content or ""
         thinking = ""
 
-        # 方式1: reasoning_content 字段 (OpenAI o-系列 / DeepSeek-R1 API)
         reasoning = getattr(msg, 'reasoning_content', None)
         if reasoning:
             thinking = reasoning
 
-        # 方式2: <think> 标签 (DeepSeek-R1 通过第三方兼容 API)
         if not thinking and '<think>' in content:
             content, thinking = self._strip_think_tags(content)
 
@@ -299,20 +458,14 @@ class OpenAIClient(BaseAIClient):
 # ── 智谱 AI 客户端 ───────────────────────────────────────────
 
 class ZhipuClient(BaseAIClient):
-    """
-    智谱 AI 客户端，使用官方 zhipuai SDK
-    支持 GLM-4V / GLM-4V-Plus / GLM-4 等模型
-    """
 
     def __init__(self, config: AIConfig):
         super().__init__(config)
         from zhipuai import ZhipuAI
         self.client = ZhipuAI(api_key=config.api_key)
-        logger.info(f"智谱 AI 客户端已初始化 "
-                     f"(model={config.model}, thinking={config.thinking})")
+        logger.info(f"智谱 AI 客户端: model={config.model}")
 
     def _call_api(self, messages: list) -> AIResponse:
-        # 智谱视觉模型的 image_url 需要完整的 data URI
         patched = self._ensure_data_uri(messages)
 
         kwargs = dict(
@@ -328,14 +481,13 @@ class ZhipuClient(BaseAIClient):
         content = msg.content or ""
         thinking = ""
 
-        if not thinking and '<think>' in content:
+        if '<think>' in content:
             content, thinking = self._strip_think_tags(content)
 
         return AIResponse(content=content, thinking=thinking)
 
     @staticmethod
     def _ensure_data_uri(messages: list) -> list:
-        """确保 image_url.url 带有 data URI 前缀（智谱要求）"""
         import copy
         patched = copy.deepcopy(messages)
         for msg in patched:
@@ -359,7 +511,6 @@ _PROVIDERS = {
 
 
 def create_ai_client(config: AIConfig) -> BaseAIClient:
-    """根据 config.provider 创建对应的 AI 客户端"""
     cls = _PROVIDERS.get(config.provider)
     if cls is None:
         raise ValueError(

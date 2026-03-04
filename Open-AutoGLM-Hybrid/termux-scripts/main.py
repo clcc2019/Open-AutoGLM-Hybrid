@@ -23,12 +23,20 @@ MAX_STEPS = 20
 STEP_INTERVAL = 1.5
 
 
-def execute_action(action: Action, phone: PhoneController) -> tuple[bool, str]:
+def _denormalize_coord(val: int, screen_size: int) -> int:
+    """将 0-999 归一化坐标转换为像素坐标"""
+    return int(val / 1000 * screen_size)
+
+
+def execute_action(action: Action, phone: PhoneController,
+                   screen_size: tuple[int, int] = None) -> tuple[bool, str]:
     """
     执行一个动作，返回 (是否成功, 描述信息)
+    screen_size: (width, height) 用于归一化坐标转换
     """
     p = action.params
     reason = p.get('reason', '')
+    sw, sh = screen_size or (1080, 2340)
 
     try:
         if action.action_type == Action.TYPE_LAUNCH_APP:
@@ -39,14 +47,24 @@ def execute_action(action: Action, phone: PhoneController) -> tuple[bool, str]:
             time.sleep(2)
             return ok, f"打开应用 \"{label}\"  {reason}"
 
-        elif action.action_type == Action.TYPE_TAP:
+        elif action.action_type in (Action.TYPE_TAP, Action.TYPE_LONG_PRESS,
+                                     Action.TYPE_DOUBLE_TAP):
             x, y = int(p['x']), int(p['y'])
+            if action.normalized_coords:
+                x = _denormalize_coord(x, sw)
+                y = _denormalize_coord(y, sh)
             ok = phone.tap(x, y)
-            return ok, f"点击 ({x}, {y})  {reason}"
+            label = action.action_type.replace('_', ' ')
+            return ok, f"{label} ({x}, {y})  {reason}"
 
         elif action.action_type == Action.TYPE_SWIPE:
             x1, y1 = int(p['x1']), int(p['y1'])
             x2, y2 = int(p['x2']), int(p['y2'])
+            if action.normalized_coords:
+                x1 = _denormalize_coord(x1, sw)
+                y1 = _denormalize_coord(y1, sh)
+                x2 = _denormalize_coord(x2, sw)
+                y2 = _denormalize_coord(y2, sh)
             ok = phone.swipe(x1, y1, x2, y2)
             return ok, f"滑动 ({x1},{y1})->({x2},{y2})  {reason}"
 
@@ -70,6 +88,9 @@ def execute_action(action: Action, phone: PhoneController) -> tuple[bool, str]:
 
         elif action.action_type == Action.TYPE_DONE:
             return True, f"任务完成  {reason}"
+
+        elif action.action_type == Action.TYPE_TAKE_OVER:
+            return False, f"需要人工接管: {reason}"
 
         else:
             return False, f"未知动作: {action}"
@@ -98,6 +119,8 @@ def run_task(task: str, phone: PhoneController, ai: BaseAIClient,
             })
             continue
 
+        screen_size = screenshot.size  # (width, height)
+
         action, thinking = ai.decide_action(task, screenshot, history)
 
         if show_thinking and thinking:
@@ -105,7 +128,7 @@ def run_task(task: str, phone: PhoneController, ai: BaseAIClient,
             if len(thinking) > 500:
                 print(f"         ...（共 {len(thinking)} 字）")
 
-        ok, desc = execute_action(action, phone)
+        ok, desc = execute_action(action, phone, screen_size=screen_size)
         status = "成功" if ok else "失败"
         print(f"  => {desc}  [{status}]")
 
