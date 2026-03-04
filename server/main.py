@@ -165,11 +165,14 @@ async def device_websocket(websocket: WebSocket, device_id: str):
 
     if device_id in devices:
         old = devices[device_id]
+        logger.info(f"设备 {device_id} 重新连接，关闭旧连接")
         try:
-            await old.websocket.close()
+            await old.websocket.close(code=4001, reason="replaced")
         except Exception:
             pass
-        logger.info(f"设备 {device_id} 重新连接，关闭旧连接")
+        for future in old.pending_responses.values():
+            if not future.done():
+                future.cancel()
 
     conn = DeviceConnection(device_id, websocket)
     devices[device_id] = conn

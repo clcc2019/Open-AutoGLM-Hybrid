@@ -11,6 +11,8 @@ import android.view.WindowManager
 import okhttp3.*
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class WebSocketClient(private val context: Context) {
 
@@ -38,11 +40,15 @@ class WebSocketClient(private val context: Context) {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    private var webSocket: WebSocket? = null
-    private var isConnected = false
-    private var shouldReconnect = true
+    @Volatile private var activeWebSocket: WebSocket? = null
+    @Volatile private var isConnected = false
+    @Volatile private var shouldReconnect = true
+    private val connecting = AtomicBoolean(false)
+    private val generation = AtomicInteger(0)
     private var listener: ConnectionListener? = null
     private var commandExecutor: CommandExecutor? = null
+
+    private val reconnectRunnable = Runnable { connect() }
 
     var serverUrl: String
         get() = prefs.getString(KEY_SERVER_URL, "") ?: ""
@@ -66,19 +72,33 @@ class WebSocketClient(private val context: Context) {
     fun connect() {
         val url = serverUrl
         if (url.isBlank()) {
-            listener?.onError("服务器地址未配置")
+            handler.post { listener?.onError("服务器地址未配置") }
+            return
+        }
+
+        if (!connecting.compareAndSet(false, true)) {
+            Log.d(TAG, "连接进行中，忽略重复请求")
             return
         }
 
         shouldReconnect = true
+        handler.removeCallbacks(reconnectRunnable)
+
+        val gen = generation.incrementAndGet()
         val wsUrl = buildWsUrl(url)
         log("正在连接: $wsUrl")
 
         val request = Request.Builder().url(wsUrl).build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        client.newWebSocket(request, object : WebSocketListener() {
 
             override fun onOpen(ws: WebSocket, response: Response) {
+                if (gen != generation.get()) {
+                    ws.close(NORMAL_CLOSURE, "stale")
+                    return
+                }
+                activeWebSocket = ws
                 isConnected = true
+                connecting.set(false)
                 handler.post { listener?.onConnected() }
                 log("已连接到服务器")
                 sendDeviceInfo()
@@ -86,10 +106,10 @@ class WebSocketClient(private val context: Context) {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                if (gen != generation.get()) return
                 try {
                     val json = JSONObject(text)
                     val type = json.optString("type", "")
-                    log("收到: $type")
 
                     when (type) {
                         "connected" -> log("服务器确认连接")
@@ -106,25 +126,28 @@ class WebSocketClient(private val context: Context) {
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                onDisconnect("连接关闭: $reason")
+                onWsGone(ws, gen, "连接关闭($code): $reason")
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                onDisconnect("连接失败: ${t.message}")
+                onWsGone(ws, gen, "连接失败: ${t.message}")
             }
         })
     }
 
     fun disconnect() {
         shouldReconnect = false
+        generation.incrementAndGet()
+        connecting.set(false)
         stopHeartbeat()
-        webSocket?.close(NORMAL_CLOSURE, "用户断开")
-        webSocket = null
+        handler.removeCallbacks(reconnectRunnable)
+        activeWebSocket?.close(NORMAL_CLOSURE, "用户断开")
+        activeWebSocket = null
         isConnected = false
     }
 
     fun send(json: JSONObject) {
-        val ws = webSocket
+        val ws = activeWebSocket
         if (ws != null && isConnected) {
             ws.send(json.toString())
         } else {
@@ -132,16 +155,32 @@ class WebSocketClient(private val context: Context) {
         }
     }
 
-    private fun onDisconnect(reason: String) {
+    private fun onWsGone(ws: WebSocket, gen: Int, reason: String) {
+        if (gen != generation.get()) {
+            Log.d(TAG, "忽略过期连接的断开回调 (gen=$gen, current=${generation.get()})")
+            return
+        }
+
+        if (activeWebSocket !== ws) {
+            Log.d(TAG, "忽略非活跃连接的断开回调")
+            return
+        }
+
+        activeWebSocket = null
         isConnected = false
+        connecting.set(false)
         stopHeartbeat()
         handler.post { listener?.onDisconnected(reason) }
         log(reason)
 
-        if (shouldReconnect) {
-            log("${RECONNECT_DELAY_MS / 1000}秒后重连...")
-            handler.postDelayed({ connect() }, RECONNECT_DELAY_MS)
-        }
+        scheduleReconnect()
+    }
+
+    private fun scheduleReconnect() {
+        if (!shouldReconnect) return
+        handler.removeCallbacks(reconnectRunnable)
+        log("${RECONNECT_DELAY_MS / 1000}秒后重连...")
+        handler.postDelayed(reconnectRunnable, RECONNECT_DELAY_MS)
     }
 
     private fun buildWsUrl(baseUrl: String): String {
