@@ -1,5 +1,6 @@
 package com.autoglm.helper
 
+import android.accessibilityservice.AccessibilityService
 import android.util.Log
 import org.json.JSONObject
 
@@ -101,7 +102,7 @@ class CommandExecutor(
             sendActionResult(requestId, false, "无障碍服务未启动")
             return
         }
-        val success = service.performGlobalAction(GLOBAL_ACTION_BACK)
+        val success = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
         sendActionResult(requestId, success)
     }
 
@@ -111,7 +112,7 @@ class CommandExecutor(
             sendActionResult(requestId, false, "无障碍服务未启动")
             return
         }
-        val success = service.performGlobalAction(GLOBAL_ACTION_HOME)
+        val success = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
         sendActionResult(requestId, success)
     }
 
@@ -152,8 +153,4 @@ class CommandExecutor(
         wsClient.send(json)
     }
 
-    companion object GlobalActions {
-        const val GLOBAL_ACTION_BACK = 1
-        const val GLOBAL_ACTION_HOME = 2
-    }
 }
