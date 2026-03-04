@@ -101,6 +101,17 @@ install_dependencies() {
     # 安装其他工具
     pkg install curl wget -y
     
+    # 安装 Pillow 编译依赖（Termux 中 Pillow 需要编译）
+    print_info "安装 Pillow 编译依赖..."
+    pkg install libjpeg-turbo libpng freetype libwebp tiff -y || {
+        print_warning "部分依赖安装失败，继续尝试..."
+    }
+    
+    # 安装编译工具（如果需要从源码编译）
+    pkg install clang make -y || {
+        print_warning "编译工具安装失败，尝试使用预编译包..."
+    }
+    
     print_success "必要软件安装完成"
 }
 
@@ -187,15 +198,83 @@ install_python_packages() {
         print_warning "pip 升级失败，继续使用当前版本"
     }
     
-    # 安装依赖（自动尝试多个镜像源）
-    print_info "安装依赖包: pillow openai requests"
-    if pip_install_with_mirrors "pillow openai requests" "$PIP_CMD"; then
-        print_success "Python 依赖安装完成"
+    # 先安装不需要编译的包
+    print_info "安装轻量级依赖: openai requests"
+    if pip_install_with_mirrors "openai requests" "$PIP_CMD"; then
+        print_success "openai requests 安装完成"
     else
-        print_error "Python 依赖安装失败"
-        print_info "请检查网络连接或手动安装: $PIP_CMD install pillow openai requests"
-        exit 1
+        print_warning "openai requests 安装失败，继续安装 Pillow..."
     fi
+    
+    # 单独安装 Pillow（需要特殊处理）
+    print_info "安装 Pillow（图像处理库）..."
+    print_info "注意: Pillow 可能需要编译，这可能需要几分钟..."
+    
+    # 设置 Termux 环境变量帮助 Pillow 找到库文件
+    if [ -z "$PREFIX" ]; then
+        export PREFIX="/data/data/com.termux/files/usr"
+    fi
+    export LDFLAGS="-L$PREFIX/lib"
+    export CPPFLAGS="-I$PREFIX/include"
+    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+    
+    # 尝试安装 Pillow（优先使用预编译的 wheel）
+    print_info "尝试使用预编译包安装 Pillow..."
+    local pillow_installed=false
+    
+    # 方法1: 使用镜像源安装预编译包
+    if pip_install_with_mirrors "pillow" "$PIP_CMD"; then
+        print_success "Pillow 安装完成（预编译包）"
+        pillow_installed=true
+    else
+        print_warning "预编译包安装失败，尝试其他方法..."
+        
+        # 方法2: 使用默认源安装预编译包
+        print_info "尝试使用默认源安装预编译包..."
+        if $PIP_CMD install pillow --timeout 60 --retries 3 2>&1; then
+            print_success "Pillow 安装完成（默认源预编译包）"
+            pillow_installed=true
+        else
+            print_warning "默认源预编译包也失败，尝试从源码编译..."
+            
+            # 方法3: 从源码编译（最后手段）
+            print_info "从源码编译 Pillow（这可能需要 5-10 分钟）..."
+            if $PIP_CMD install pillow --no-binary :all: --timeout 600 2>&1; then
+                print_success "Pillow 从源码编译安装完成"
+                pillow_installed=true
+            fi
+        fi
+    fi
+    
+    # 验证安装
+    if [ "$pillow_installed" = true ]; then
+        if python -c "import PIL; print('Pillow version:', PIL.__version__)" 2>/dev/null; then
+            print_success "Pillow 验证成功"
+        else
+            print_warning "Pillow 安装完成但验证失败，可能有问题"
+        fi
+    else
+        print_error "Pillow 安装失败"
+        print_info ""
+        print_info "故障排除步骤:"
+        print_info "1. 检查编译依赖:"
+        print_info "   pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
+        print_info ""
+        print_info "2. 手动安装 Pillow:"
+        print_info "   export LDFLAGS=\"-L\$PREFIX/lib\""
+        print_info "   export CPPFLAGS=\"-I\$PREFIX/include\""
+        print_info "   $PIP_CMD install pillow"
+        print_info ""
+        print_info "3. 如果仍然失败，可以跳过 Pillow（某些功能可能不可用）"
+        read -p "是否跳过 Pillow 安装继续部署? (y/n): " skip_pillow
+        if [ "$skip_pillow" != "y" ]; then
+            exit 1
+        else
+            print_warning "跳过 Pillow 安装，继续部署..."
+        fi
+    fi
+    
+    print_success "Python 依赖安装完成"
 }
 
 # 下载 Open-AutoGLM
