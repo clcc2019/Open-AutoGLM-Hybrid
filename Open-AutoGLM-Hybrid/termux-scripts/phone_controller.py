@@ -19,11 +19,6 @@ from typing import Optional, Tuple
 from PIL import Image
 from io import BytesIO
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger('PhoneController')
 
 
@@ -35,37 +30,62 @@ class PhoneController:
     MODE_LADB = "ladb"  # LADB 模式
     MODE_NONE = "none"  # 无可用模式
     
-    def __init__(self, helper_url: str = "http://localhost:8080"):
+    def __init__(self, helper_url: str = "http://localhost:8080",
+                 preferred_mode: str = "auto"):
         """
         初始化手机控制器
-        
+
         Args:
             helper_url: AutoGLM Helper 的 URL
+            preferred_mode: 控制模式偏好
+                - "auto": 自动检测（先无障碍，后 LADB）
+                - "accessibility": 仅无障碍服务
+                - "ladb": 仅 LADB/ADB
         """
         self.helper_url = helper_url
         self.mode = self.MODE_NONE
         self.adb_device = None
-        
-        # 自动检测可用模式
+        self.preferred_mode = preferred_mode.lower()
+
         self._detect_mode()
-    
+
     def _detect_mode(self):
-        """检测可用的控制模式"""
-        logger.info("检测可用的控制模式...")
-        
-        # 1. 尝试无障碍服务模式
+        """根据 preferred_mode 检测并设置控制模式"""
+        logger.info(f"检测控制模式 (偏好: {self.preferred_mode})...")
+
+        if self.preferred_mode == "accessibility":
+            if self._try_accessibility_service():
+                self.mode = self.MODE_ACCESSIBILITY
+                logger.info(f"✅ 使用无障碍服务模式 ({self.helper_url})")
+                return
+            raise Exception(
+                "无障碍服务不可用！\n"
+                "请确保 AutoGLM Helper 已运行并开启无障碍权限。\n"
+                "如需自动降级，请将 mode 设为 auto。"
+            )
+
+        if self.preferred_mode == "ladb":
+            if self._try_ladb():
+                self.mode = self.MODE_LADB
+                logger.info(f"✅ 使用 LADB 模式 (设备: {self.adb_device})")
+                return
+            raise Exception(
+                "LADB/ADB 不可用！\n"
+                "请确保 ADB 已安装且设备已连接。\n"
+                "如需自动降级，请将 mode 设为 auto。"
+            )
+
+        # auto: 先无障碍，后 LADB
         if self._try_accessibility_service():
             self.mode = self.MODE_ACCESSIBILITY
             logger.info(f"✅ 使用无障碍服务模式 ({self.helper_url})")
             return
-        
-        # 2. 降级到 LADB 模式
+
         if self._try_ladb():
             self.mode = self.MODE_LADB
             logger.warning(f"⚠️ 降级到 LADB 模式 (设备: {self.adb_device})")
             return
-        
-        # 3. 都不可用
+
         self.mode = self.MODE_NONE
         logger.error("❌ 无可用控制方式")
         raise Exception(
@@ -329,6 +349,195 @@ class PhoneController:
             logger.error(f"滑动失败 (LADB): {e}")
             return False
     
+    def back(self) -> bool:
+        """执行返回操作"""
+        if self.mode == self.MODE_ACCESSIBILITY:
+            return self._back_accessibility()
+        elif self.mode == self.MODE_LADB:
+            return self._back_ladb()
+        else:
+            logger.error("无可用的返回方式")
+            return False
+
+    def _back_accessibility(self) -> bool:
+        try:
+            response = requests.post(f"{self.helper_url}/back", timeout=5)
+            if response.status_code == 200:
+                return response.json().get('success', False)
+            return False
+        except Exception as e:
+            logger.error(f"返回失败 (无障碍): {e}")
+            return False
+
+    def _back_ladb(self) -> bool:
+        try:
+            subprocess.run(
+                ['adb', '-s', self.adb_device, 'shell', 'input', 'keyevent', '4'],
+                check=True, timeout=3
+            )
+            return True
+        except Exception as e:
+            logger.error(f"返回失败 (LADB): {e}")
+            return False
+
+    def home(self) -> bool:
+        """执行回到桌面操作"""
+        if self.mode == self.MODE_ACCESSIBILITY:
+            return self._home_accessibility()
+        elif self.mode == self.MODE_LADB:
+            return self._home_ladb()
+        else:
+            logger.error("无可用的 Home 方式")
+            return False
+
+    def _home_accessibility(self) -> bool:
+        try:
+            response = requests.post(f"{self.helper_url}/home", timeout=5)
+            if response.status_code == 200:
+                return response.json().get('success', False)
+            return False
+        except Exception as e:
+            logger.error(f"Home 失败 (无障碍): {e}")
+            return False
+
+    def _home_ladb(self) -> bool:
+        try:
+            subprocess.run(
+                ['adb', '-s', self.adb_device, 'shell', 'input', 'keyevent', '3'],
+                check=True, timeout=3
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Home 失败 (LADB): {e}")
+            return False
+
+    def get_current_app(self) -> Optional[Tuple[str, str]]:
+        """
+        获取当前前台应用信息
+
+        Returns:
+            (app_name, package_name)，失败返回 None
+        """
+        if self.mode == self.MODE_ACCESSIBILITY:
+            return self._get_current_app_accessibility()
+        elif self.mode == self.MODE_LADB:
+            return self._get_current_app_ladb()
+        else:
+            return None
+
+    def _get_current_app_accessibility(self) -> Optional[Tuple[str, str]]:
+        try:
+            response = requests.get(f"{self.helper_url}/current_app", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    return (data.get('app_name', ''), data.get('package_name', ''))
+            return None
+        except Exception as e:
+            logger.error(f"获取当前应用失败 (无障碍): {e}")
+            return None
+
+    def _get_current_app_ladb(self) -> Optional[Tuple[str, str]]:
+        try:
+            result = subprocess.run(
+                ['adb', '-s', self.adb_device, 'shell',
+                 'dumpsys', 'activity', 'activities'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                return None
+            for line in result.stdout.splitlines():
+                if 'mResumedActivity' in line or 'mFocusedActivity' in line:
+                    # 格式: mResumedActivity: ActivityRecord{... com.pkg/.Activity ...}
+                    parts = line.strip().split()
+                    for part in parts:
+                        if '/' in part and '.' in part:
+                            pkg = part.split('/')[0]
+                            return (pkg, pkg)
+            return None
+        except Exception as e:
+            logger.error(f"获取当前应用失败 (LADB): {e}")
+            return None
+
+    def launch_app(self, app_name: str = '', package_name: str = '') -> bool:
+        """
+        启动应用
+
+        Args:
+            app_name: 应用名称 (如 "淘宝"、"微信")
+            package_name: 包名 (如 "com.tencent.mm")，优先使用
+        """
+        if self.mode == self.MODE_ACCESSIBILITY:
+            return self._launch_app_accessibility(app_name, package_name)
+        elif self.mode == self.MODE_LADB:
+            return self._launch_app_ladb(app_name, package_name)
+        else:
+            logger.error("无可用的启动应用方式")
+            return False
+
+    def _launch_app_accessibility(self, app_name: str, package_name: str) -> bool:
+        try:
+            payload = {}
+            if package_name:
+                payload['package_name'] = package_name
+            elif app_name:
+                payload['app_name'] = app_name
+            else:
+                return False
+
+            response = requests.post(
+                f"{self.helper_url}/launch_app",
+                json=payload, timeout=10
+            )
+            if response.status_code == 200:
+                success = response.json().get('success', False)
+                logger.debug(f"启动应用 {app_name or package_name}: {success}")
+                return success
+            return False
+        except Exception as e:
+            logger.error(f"启动应用失败 (无障碍): {e}")
+            return False
+
+    def _launch_app_ladb(self, app_name: str, package_name: str) -> bool:
+        APP_PACKAGES = {
+            "淘宝": "com.taobao.taobao",
+            "闲鱼": "com.taobao.idlefish",
+            "咸鱼": "com.taobao.idlefish",
+            "京东": "com.jingdong.app.mall",
+            "微信": "com.tencent.mm",
+            "支付宝": "com.eg.android.AlipayGphone",
+            "抖音": "com.ss.android.ugc.aweme",
+            "快手": "com.smile.gifmaker",
+            "微博": "com.sina.weibo",
+            "小红书": "com.xingin.xhs",
+            "美团": "com.sankuai.meituan",
+            "饿了么": "me.ele",
+            "拼多多": "com.xunmeng.pinduoduo",
+            "高德地图": "com.autonavi.minimap",
+            "百度地图": "com.baidu.BaiduMap",
+            "QQ": "com.tencent.mobileqq",
+            "哔哩哔哩": "tv.danmaku.bili",
+            "B站": "tv.danmaku.bili",
+            "QQ音乐": "com.tencent.qqmusic",
+            "网易云音乐": "com.netease.cloudmusic",
+        }
+        pkg = package_name or APP_PACKAGES.get(app_name, '')
+        if not pkg:
+            logger.error(f"LADB 模式下未知应用: {app_name}")
+            return False
+        try:
+            subprocess.run(
+                ['adb', '-s', self.adb_device, 'shell',
+                 'monkey', '-p', pkg, '-c',
+                 'android.intent.category.LAUNCHER', '1'],
+                check=True, timeout=5
+            )
+            logger.debug(f"启动应用 {pkg}: True")
+            return True
+        except Exception as e:
+            logger.error(f"启动应用失败 (LADB): {e}")
+            return False
+
     def input_text(self, text: str) -> bool:
         """
         输入文字
@@ -369,20 +578,30 @@ class PhoneController:
             return False
     
     def _input_ladb(self, text: str) -> bool:
-        """通过 LADB 输入"""
+        """通过 LADB 输入（优先用 ADB Keyboard 支持中文，fallback 到 input text）"""
         try:
-            # ADB input text 不支持中文，需要使用其他方法
-            # 这里简化处理，仅支持英文
-            escaped_text = text.replace(' ', '%s')
+            encoded = base64.b64encode(text.encode('utf-8')).decode('utf-8')
             result = subprocess.run(
-                ['adb', '-s', self.adb_device, 'shell', 'input', 'text', escaped_text],
-                check=True,
-                timeout=5
+                ['adb', '-s', self.adb_device, 'shell',
+                 'am', 'broadcast',
+                 '-a', 'ADB_INPUT_B64',
+                 '--es', 'msg', encoded],
+                capture_output=True, timeout=5
             )
-            
-            logger.debug(f"输入文字: True")
+            if result.returncode == 0 and 'result=0' not in result.stdout.decode(errors='ignore'):
+                logger.debug("输入文字 (ADB Keyboard): True")
+                return True
+
+            # ADB Keyboard 不可用，fallback（仅支持 ASCII）
+            logger.debug("ADB Keyboard 不可用，fallback 到 input text")
+            escaped = text.replace(' ', '%s')
+            subprocess.run(
+                ['adb', '-s', self.adb_device, 'shell', 'input', 'text', escaped],
+                check=True, timeout=5
+            )
+            logger.debug("输入文字 (input text): True")
             return True
-            
+
         except Exception as e:
             logger.error(f"输入失败 (LADB): {e}")
             return False

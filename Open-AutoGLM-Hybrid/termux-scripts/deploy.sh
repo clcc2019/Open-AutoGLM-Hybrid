@@ -88,8 +88,8 @@ install_python_packages() {
     print_info "安装 Python 依赖包..."
     
     
-    # 安装依赖
-    pip install pillow openai requests -i https://pypi.tuna.tsinghua.edu.cn/simple
+    # 安装依赖（支持 OpenAI 兼容 + 智谱 AI）
+    pip install pillow openai zhipuai requests -i https://pypi.tuna.tsinghua.edu.cn/simple
     
     print_success "Python 依赖安装完成"
 }
@@ -136,42 +136,107 @@ install_autoglm() {
 # 下载混合方案脚本
 download_hybrid_scripts() {
     print_info "下载混合方案脚本..."
-    
+
     cd ~
-    
+
     # 创建目录
     mkdir -p ~/.autoglm
-    
-    # 下载 phone_controller.py (自动降级逻辑)
+
+    # 下载脚本文件到 ~/.autoglm/
     # 注意: 这里需要替换为实际的下载链接
-    # wget -O ~/.autoglm/phone_controller.py https://your-link/phone_controller.py
-    
-    # 暂时使用本地创建
-    cat > ~/.autoglm/phone_controller.py << 'PYTHON_EOF'
-# 这个文件会在后续步骤中创建
-pass
-PYTHON_EOF
-    
+    # for f in phone_controller.py ai_client.py config.py main.py requirements.txt; do
+    #     wget -O ~/.autoglm/$f https://your-link/$f
+    # done
+
+    # 放置示例配置文件
+    cat > ~/.autoglm/config.example.ini << 'EXAMPLE_EOF'
+# ============================================================
+#  Open-AutoGLM 配置文件示例
+#  复制本文件为 config.ini 并填入你的 API Key 即可使用:
+#    cp config.example.ini config.ini
+# ============================================================
+
+[ai]
+# provider 可选值: zhipu / openai
+#   zhipu  - 智谱 AI (GLM-4V-Plus, GLM-4V, GLM-4, GLM-3-Turbo)
+#   openai - 任何兼容 OpenAI API 的服务
+#            (OpenAI / DeepSeek / Moonshot / Ollama / vLLM 等)
+provider = zhipu
+
+# API 地址
+#   智谱:     https://open.bigmodel.cn/api/paas/v4
+#   OpenAI:   https://api.openai.com/v1
+#   DeepSeek: https://api.deepseek.com/v1
+#   Moonshot: https://api.moonshot.cn/v1
+base_url = https://open.bigmodel.cn/api/paas/v4
+
+# 你的 API Key（必填）
+api_key = YOUR_API_KEY_HERE
+
+# 模型名称
+#   智谱推荐: glm-4v-plus (视觉理解最强), glm-4v, glm-4
+#   OpenAI:   gpt-4o, gpt-4-turbo
+#   DeepSeek: deepseek-chat
+model = glm-4v-plus
+
+# 可选: 思考模式 (true/false)
+#   开启后模型会先进行推理再输出动作，适合推理模型:
+#   OpenAI o1/o3, DeepSeek-R1 等
+# thinking = false
+
+# 可选: 最大 token 数
+# max_tokens = 4096
+
+# 可选: 温度 (0.0 ~ 1.0)
+# temperature = 0.7
+
+[helper]
+# AutoGLM Helper APP 的 HTTP 地址
+url = http://localhost:8080
+
+# 控制模式: auto / accessibility / ladb
+#   auto          - 自动检测（先尝试无障碍，不可用则降级到 LADB）
+#   accessibility - 仅使用无障碍服务（需要 AutoGLM Helper APP）
+#   ladb          - 仅使用 LADB/ADB
+mode = auto
+EXAMPLE_EOF
+
     print_success "混合方案脚本下载完成"
+    print_info "示例配置已放置: ~/.autoglm/config.example.ini"
 }
 
 # 配置 AI 服务
 configure_ai_service() {
     print_info "配置 AI 服务..."
 
+    if [ -f ~/.autoglm/config.ini ]; then
+        print_warning "检测到已有配置: ~/.autoglm/config.ini"
+        read -p "是否重新配置? (y/n，默认 n): " redo
+        if [ "$redo" != "y" ]; then
+            print_info "保留现有配置"
+            return
+        fi
+    fi
+
     echo ""
     echo "请选择 AI 服务提供商:"
-    echo "  1) 智谱 AI (推荐)"
-    echo "  2) GRS AI"
+    echo "  1) 智谱 AI (推荐，支持 GLM-4V 视觉模型)"
+    echo "  2) OpenAI 兼容 (OpenAI / DeepSeek / Moonshot 等)"
+    echo "  s) 跳过，稍后手动编辑 config.ini"
     echo ""
-    read -p "请输入选项 (1/2): " choice
+    read -p "请输入选项 (1/2/s): " choice
 
     case $choice in
         1)
             configure_zhipu_ai
             ;;
         2)
-            configure_grs_ai
+            configure_openai_compatible
+            ;;
+        s|S)
+            print_info "跳过配置，从示例文件生成默认 config.ini ..."
+            cp ~/.autoglm/config.example.ini ~/.autoglm/config.ini
+            print_warning "请编辑 ~/.autoglm/config.ini 填入你的 API Key"
             ;;
         *)
             print_warning "无效选项，默认使用智谱 AI"
@@ -196,24 +261,28 @@ configure_zhipu_ai() {
 
     echo ""
     echo "请选择智谱模型:"
-    echo "  1) GLM-4V (推荐 - 支持视觉理解)"
-    echo "  2) GLM-4"
-    echo "  3) GLM-3-Turbo"
+    echo "  1) GLM-4V-Plus (推荐 - 最强视觉理解)"
+    echo "  2) GLM-4V"
+    echo "  3) GLM-4"
+    echo "  4) GLM-3-Turbo"
     echo ""
-    read -p "请输入选项 (1/2/3，默认 1): " model_choice
+    read -p "请输入选项 (1/2/3/4，默认 1): " model_choice
 
     case $model_choice in
         1)
-            model="glm-4v"
+            model="glm-4v-plus"
             ;;
         2)
-            model="glm-4"
+            model="glm-4v"
             ;;
         3)
+            model="glm-4"
+            ;;
+        4)
             model="glm-3-turbo"
             ;;
         *)
-            model="glm-4v"
+            model="glm-4v-plus"
             ;;
     esac
 
@@ -234,12 +303,12 @@ EOF
     print_success "智谱 AI 配置完成"
 }
 
-# 配置 GRS AI
-configure_grs_ai() {
-    print_info "配置 GRS AI..."
+# 配置 OpenAI 兼容 API
+configure_openai_compatible() {
+    print_info "配置 OpenAI 兼容 API..."
 
     echo ""
-    echo "请输入您的 GRS AI API Key:"
+    echo "请输入 API Key:"
     read -p "API Key: " api_key
 
     if [ -z "$api_key" ]; then
@@ -248,19 +317,36 @@ configure_grs_ai() {
         return
     fi
 
+    echo ""
+    echo "请输入 API Base URL (留空使用 OpenAI 官方):"
+    echo "  常用地址:"
+    echo "    OpenAI:   https://api.openai.com/v1"
+    echo "    DeepSeek: https://api.deepseek.com/v1"
+    echo "    Moonshot: https://api.moonshot.cn/v1"
+    echo ""
+    read -p "Base URL [https://api.openai.com/v1]: " base_url
+    base_url=${base_url:-https://api.openai.com/v1}
+
+    echo ""
+    echo "请输入模型名称 (留空使用 gpt-4o):"
+    read -p "模型 [gpt-4o]: " model
+    model=${model:-gpt-4o}
+
+    print_info "已选择: $base_url / $model"
+
     # 创建 INI 配置文件
     cat > ~/.autoglm/config.ini << EOF
 [ai]
-provider = grs
-base_url = https://api.grsai.com/v1
+provider = openai
+base_url = $base_url
 api_key = $api_key
-model = gpt-4-vision-preview
+model = $model
 
 [helper]
 url = http://localhost:8080
 EOF
 
-    print_success "GRS AI 配置完成"
+    print_success "OpenAI 兼容 API 配置完成"
 }
 
 # 创建启动脚本
@@ -274,19 +360,8 @@ create_launcher() {
     cat > ~/bin/autoglm << 'LAUNCHER_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
-# 配置文件路径
-CONFIG_FILE=~/.autoglm/config.ini
-
-# 读取 INI 配置并导出环境变量
-if [ -f "$CONFIG_FILE" ]; then
-    export PHONE_AGENT_BASE_URL=$(grep -E '^base_url\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
-    export PHONE_AGENT_API_KEY=$(grep -E '^api_key\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
-    export PHONE_AGENT_MODEL=$(grep -E '^model\s*=' "$CONFIG_FILE" | cut -d'=' -f2 | xargs)
-    export AUTOGLM_HELPER_URL=$(grep -E '^url\s*=' "$CONFIG_FILE" | tail -1 | cut -d'=' -f2 | xargs)
-fi
-
-# 启动 AutoGLM
-cd ~/Open-AutoGLM
+# 启动 AutoGLM（配置由 Python config.py 从 ~/.autoglm/config.ini 读取）
+cd ~/.autoglm
 python main.py "$@"
 LAUNCHER_EOF
 
@@ -345,8 +420,8 @@ show_completion() {
     echo "============================================================"
     echo ""
     echo "支持的 AI 服务:"
-    echo "  - 智谱 AI (GLM-4V, GLM-4, GLM-3-Turbo)"
-    echo "  - GRS AI (GPT-4-Vision)"
+    echo "  - 智谱 AI (GLM-4V-Plus, GLM-4V, GLM-4, GLM-3-Turbo)"
+    echo "  - OpenAI 兼容 (OpenAI / DeepSeek / Moonshot 等)"
     echo ""
     echo "使用方法:"
     echo "  1. 确保 AutoGLM Helper 已运行并开启无障碍权限"
