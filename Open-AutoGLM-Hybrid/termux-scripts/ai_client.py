@@ -199,7 +199,6 @@ class BaseAIClient(ABC):
         if idx >= 0:
             thinking = content[:idx].strip()
             action_text = content[idx:].strip()
-            # 找到对应的右括号
             paren_depth = 0
             for i, ch in enumerate(action_text):
                 if ch == '(':
@@ -211,11 +210,40 @@ class BaseAIClient(ABC):
                         break
             return action_text, thinking
 
+        # 尝试简化格式: Launch("闲鱼"), Tap(500,800), Wait(2), Back() 等
+        _SIMPLE_ACTIONS = (
+            'Launch', 'Tap', 'Click', 'Swipe', 'Type', 'Type_Name',
+            'Back', 'Home', 'Wait', 'Long Press', 'Double Tap',
+            'Take_over', 'Interact', 'Note',
+        )
+        for act_name in _SIMPLE_ACTIONS:
+            pattern = re.compile(
+                re.escape(act_name) + r'\s*\(', re.IGNORECASE
+            )
+            m = pattern.search(content)
+            if m:
+                thinking = content[:m.start()].strip()
+                action_text = content[m.start():].strip()
+                paren_depth = 0
+                for i, ch in enumerate(action_text):
+                    if ch == '(':
+                        paren_depth += 1
+                    elif ch == ')':
+                        paren_depth -= 1
+                        if paren_depth == 0:
+                            action_text = action_text[:i + 1]
+                            break
+                return action_text, thinking
+
         return content, ""
 
     @classmethod
     def _parse_autoglm_action(cls, text: str) -> Action:
-        """解析 autoglm-phone 格式: do(action="...", ...) 或 finish(message="...")"""
+        """解析 autoglm-phone 格式，支持:
+        - do(action="Launch", app="闲鱼")  — 官方完整格式
+        - finish(message="...")             — 任务完成
+        - Launch("闲鱼")                    — 简化格式
+        """
         text = text.strip()
 
         # finish(message="...")
@@ -224,18 +252,88 @@ class BaseAIClient(ABC):
             msg = m.group(1) if m else ""
             return Action(Action.TYPE_DONE, reason=msg)
 
-        # do(action="...", ...)
-        if not text.startswith('do'):
-            logger.warning(f"autoglm-phone 无法解析: {text[:200]}")
-            return Action(Action.TYPE_UNKNOWN, raw=text)
+        # do(action="...", ...) — 官方完整格式
+        if text.startswith('do(') or text.startswith('do ('):
+            try:
+                data = cls._ast_parse_do(text)
+            except Exception as e:
+                logger.warning(f"AST 解析 do() 失败: {e}, 原文: {text[:200]}")
+                return Action(Action.TYPE_UNKNOWN, raw=text)
+            return cls._build_autoglm_action(data)
 
-        try:
-            data = cls._ast_parse_do(text)
-        except Exception as e:
-            logger.warning(f"AST 解析 do() 失败: {e}, 原文: {text[:200]}")
-            return Action(Action.TYPE_UNKNOWN, raw=text)
+        # 简化格式: Launch("闲鱼"), Tap(500,800), Wait(2), Back() 等
+        simple = cls._parse_simple_call(text)
+        if simple is not None:
+            return cls._build_autoglm_action(simple)
 
-        return cls._build_autoglm_action(data)
+        logger.warning(f"autoglm-phone 无法解析: {text[:200]}")
+        return Action(Action.TYPE_UNKNOWN, raw=text)
+
+    @classmethod
+    def _parse_simple_call(cls, text: str) -> Optional[dict]:
+        """解析简化格式 ActionName(args) → dict"""
+        m = re.match(r'(\w[\w\s]*?)\s*\(', text)
+        if not m:
+            return None
+
+        func_name = m.group(1).strip()
+
+        # 提取括号内的参数部分
+        paren_start = m.end() - 1
+        paren_depth = 0
+        paren_end = len(text)
+        for i in range(paren_start, len(text)):
+            if text[i] == '(':
+                paren_depth += 1
+            elif text[i] == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    paren_end = i
+                    break
+        args_str = text[paren_start + 1:paren_end].strip()
+
+        # 按 func_name 分派解析
+        name_lower = func_name.lower().replace(' ', '_')
+
+        if name_lower == 'launch':
+            app = args_str.strip('"\'')
+            return {"action": "Launch", "app": app}
+
+        if name_lower in ('tap', 'click', 'long_press', 'double_tap'):
+            action_map = {'tap': 'Tap', 'click': 'Tap',
+                          'long_press': 'Long Press', 'double_tap': 'Double Tap'}
+            coords = re.findall(r'[-+]?\d+', args_str)
+            if len(coords) >= 2:
+                return {"action": action_map.get(name_lower, 'Tap'),
+                        "element": [int(coords[0]), int(coords[1])]}
+
+        if name_lower == 'swipe':
+            coords = re.findall(r'[-+]?\d+', args_str)
+            if len(coords) >= 4:
+                return {"action": "Swipe",
+                        "start": [int(coords[0]), int(coords[1])],
+                        "end": [int(coords[2]), int(coords[3])]}
+
+        if name_lower in ('type', 'type_name'):
+            txt = args_str.strip('"\'')
+            return {"action": "Type", "text": txt}
+
+        if name_lower == 'wait':
+            nums = re.findall(r'\d+', args_str)
+            dur = nums[0] if nums else "2"
+            return {"action": "Wait", "duration": f"{dur} seconds"}
+
+        if name_lower == 'back':
+            return {"action": "Back"}
+
+        if name_lower == 'home':
+            return {"action": "Home"}
+
+        if name_lower == 'take_over':
+            msg = args_str.strip('"\'')
+            return {"action": "Take_over", "message": msg}
+
+        return None
 
     @staticmethod
     def _ast_parse_do(text: str) -> dict:
