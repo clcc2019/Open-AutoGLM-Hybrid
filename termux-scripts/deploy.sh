@@ -206,32 +206,8 @@ install_python_packages() {
         print_warning "openai requests 安装失败，继续安装 Pillow..."
     fi
     
-    # 单独安装 Pillow（需要特殊处理）
-    print_info "安装 Pillow（图像处理库）..."
-    
-    # 诊断信息
-    print_info "系统信息:"
-    print_info "  Python 版本: $(python --version 2>&1)"
-    print_info "  pip 版本: $($PIP_CMD --version 2>&1 | head -1)"
-    print_info "  架构: $(uname -m)"
-    
-    # 设置 Termux 环境变量帮助 Pillow 找到库文件
-    if [ -z "$PREFIX" ]; then
-        export PREFIX="/data/data/com.termux/files/usr"
-    fi
-    export LDFLAGS="-L$PREFIX/lib"
-    export CPPFLAGS="-I$PREFIX/include"
-    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
-    
-    # Termux 中通常没有预编译的 Pillow wheel，直接从源码编译
-    print_info "注意: Termux 中 Pillow 需要从源码编译，这可能需要 5-10 分钟..."
-    print_info "请确保设备有足够的电量和存储空间..."
-    
-    # 确保编译工具已安装
-    if ! command -v clang &> /dev/null; then
-        print_info "安装编译工具..."
-        pkg install clang make -y
-    fi
+    # 单独安装 Pillow（可选，如果失败可以跳过）
+    print_info "安装 Pillow（图像处理库，可选）..."
     
     # 检查是否已安装 Pillow
     if python -c "import PIL" 2>/dev/null; then
@@ -240,28 +216,67 @@ install_python_packages() {
     else
         pillow_installed=false
         
-        # 直接使用 --no-binary 从源码编译（Termux 推荐方式）
-        print_info "从源码编译 Pillow..."
-        print_info "这可能需要 5-10 分钟，请耐心等待..."
+        # 方法1: 尝试使用预编译的 wheel 文件（如果有）
+        print_info "尝试安装预编译包..."
         
-        # 使用 --no-binary pillow 强制从源码编译
-        if $PIP_CMD install pillow --no-binary pillow --timeout 600 2>&1; then
-            print_success "Pillow 从源码编译安装完成"
+        # 设置 Termux 环境变量
+        if [ -z "$PREFIX" ]; then
+            export PREFIX="/data/data/com.termux/files/usr"
+        fi
+        export LDFLAGS="-L$PREFIX/lib"
+        export CPPFLAGS="-I$PREFIX/include"
+        export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+        
+        # 尝试从 PyPI 安装（可能失败，但先试试）
+        if $PIP_CMD install pillow --timeout 30 --retries 2 2>&1 | grep -q "no matching distribution"; then
+            print_warning "未找到预编译包，尝试从源码编译..."
+            
+            # 方法2: 从源码编译
+            print_info "从源码编译 Pillow（这可能需要 5-10 分钟）..."
+            print_info "如果编译失败，可以跳过 Pillow 安装（某些功能可能受限）..."
+            
+            # 确保编译工具已安装
+            if ! command -v clang &> /dev/null; then
+                print_info "安装编译工具..."
+                pkg install clang make -y
+            fi
+            
+            # 从源码编译
+            if $PIP_CMD install pillow --no-binary pillow --timeout 600 2>&1; then
+                print_success "Pillow 从源码编译安装完成"
+                pillow_installed=true
+            else
+                print_warning "Pillow 编译失败"
+                print_info ""
+                print_info "Pillow 是可选的，如果安装失败可以跳过"
+                print_info "代码已优化，可以在没有 Pillow 的情况下运行（功能可能受限）"
+                print_info ""
+                read -p "是否跳过 Pillow 安装继续部署? (y/n): " skip_pillow
+                if [ "$skip_pillow" = "y" ]; then
+                    print_warning "跳过 Pillow 安装，继续部署..."
+                    pillow_installed=false
+                else
+                    print_info ""
+                    print_info "手动安装 Pillow 的方法:"
+                    print_info "1. 安装编译依赖:"
+                    print_info "   pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
+                    print_info ""
+                    print_info "2. 设置环境变量并安装:"
+                    print_info "   export LDFLAGS=\"-L\$PREFIX/lib\""
+                    print_info "   export CPPFLAGS=\"-I\$PREFIX/include\""
+                    print_info "   $PIP_CMD install pillow --no-binary pillow"
+                    print_info ""
+                    print_info "3. 或者稍后手动安装:"
+                    print_info "   $PIP_CMD install pillow"
+                    exit 1
+                fi
+            fi
+        elif $PIP_CMD install pillow --timeout 30 --retries 2 2>&1; then
+            print_success "Pillow 安装完成（预编译包）"
             pillow_installed=true
         else
-            print_error "从源码编译失败"
-            print_info ""
-            print_info "常见问题和解决方案:"
-            print_info "1. 缺少编译依赖，运行:"
-            print_info "   pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
-            print_info ""
-            print_info "2. 磁盘空间不足，清理缓存:"
-            print_info "   pip cache purge"
-            print_info ""
-            print_info "3. 手动安装（使用详细输出）:"
-            print_info "   export LDFLAGS=\"-L\$PREFIX/lib\""
-            print_info "   export CPPFLAGS=\"-I\$PREFIX/include\""
-            print_info "   $PIP_CMD install pillow --no-binary pillow -v"
+            print_warning "Pillow 安装失败，但可以跳过继续部署"
+            pillow_installed=false
         fi
     fi
     
@@ -273,24 +288,18 @@ install_python_packages() {
             print_warning "Pillow 安装完成但验证失败，可能有问题"
         fi
     else
-        print_error "Pillow 安装失败"
+        print_warning "Pillow 未安装（可选依赖）"
         print_info ""
-        print_info "故障排除步骤:"
-        print_info "1. 检查编译依赖:"
-        print_info "   pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
+        print_info "注意: 代码已优化，可以在没有 Pillow 的情况下运行"
+        print_info "功能说明:"
+        print_info "  - 有 Pillow: 返回 PIL.Image 对象，支持图像处理"
+        print_info "  - 无 Pillow: 返回 bytes 数据，可直接发送给 API"
         print_info ""
-        print_info "2. 手动安装 Pillow:"
-        print_info "   export LDFLAGS=\"-L\$PREFIX/lib\""
-        print_info "   export CPPFLAGS=\"-I\$PREFIX/include\""
-        print_info "   $PIP_CMD install pillow"
-        print_info ""
-        print_info "3. 如果仍然失败，可以跳过 Pillow（某些功能可能不可用）"
-        read -p "是否跳过 Pillow 安装继续部署? (y/n): " skip_pillow
-        if [ "$skip_pillow" != "y" ]; then
-            exit 1
-        else
-            print_warning "跳过 Pillow 安装，继续部署..."
-        fi
+        print_info "如果需要安装 Pillow，可以稍后运行:"
+        print_info "  pkg install libjpeg-turbo libpng freetype libwebp tiff clang make -y"
+        print_info "  export LDFLAGS=\"-L\$PREFIX/lib\""
+        print_info "  export CPPFLAGS=\"-I\$PREFIX/include\""
+        print_info "  $PIP_CMD install pillow --no-binary pillow"
     fi
     
     print_success "Python 依赖安装完成"

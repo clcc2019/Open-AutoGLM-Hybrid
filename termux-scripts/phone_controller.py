@@ -15,9 +15,16 @@ import requests
 import base64
 import time
 import logging
-from typing import Optional, Tuple
-from PIL import Image
+from typing import Optional, Tuple, Union
 from io import BytesIO
+
+# Pillow 是可选的，如果不可用则使用 bytes
+try:
+    from PIL import Image
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
+    Image = None  # 类型提示用
 
 # 配置日志
 logging.basicConfig(
@@ -140,12 +147,14 @@ class PhoneController:
         """获取当前控制模式"""
         return self.mode
     
-    def screenshot(self) -> Optional[Image.Image]:
+    def screenshot(self) -> Optional[Union['Image.Image', bytes]]:
         """
         截取屏幕
         
         Returns:
-            PIL.Image 对象，失败返回 None
+            如果 Pillow 可用，返回 PIL.Image 对象
+            如果 Pillow 不可用，返回 bytes 数据
+            失败返回 None
         """
         if self.mode == self.MODE_ACCESSIBILITY:
             return self._screenshot_accessibility()
@@ -155,7 +164,7 @@ class PhoneController:
             logger.error("无可用的截图方式")
             return None
     
-    def _screenshot_accessibility(self) -> Optional[Image.Image]:
+    def _screenshot_accessibility(self) -> Optional[Union['Image.Image', bytes]]:
         """通过无障碍服务截图"""
         try:
             response = requests.get(
@@ -168,9 +177,14 @@ class PhoneController:
                 if data.get('success'):
                     # 解码 Base64 图片
                     image_data = base64.b64decode(data['image'])
-                    image = Image.open(BytesIO(image_data))
-                    logger.debug(f"截图成功 (无障碍): {image.size}")
-                    return image
+                    
+                    if HAS_PILLOW:
+                        image = Image.open(BytesIO(image_data))
+                        logger.debug(f"截图成功 (无障碍): {image.size}")
+                        return image
+                    else:
+                        logger.debug(f"截图成功 (无障碍): {len(image_data)} bytes (Pillow 不可用)")
+                        return image_data
             
             logger.error(f"截图失败: HTTP {response.status_code}")
             return None
@@ -179,7 +193,7 @@ class PhoneController:
             logger.error(f"截图失败 (无障碍): {e}")
             return None
     
-    def _screenshot_ladb(self) -> Optional[Image.Image]:
+    def _screenshot_ladb(self) -> Optional[Union['Image.Image', bytes]]:
         """通过 LADB 截图"""
         try:
             # 截图到设备
@@ -197,17 +211,26 @@ class PhoneController:
                 timeout=5
             )
             
-            # 打开图片
-            image = Image.open(local_path)
-            logger.debug(f"截图成功 (LADB): {image.size}")
+            # 读取图片数据
+            with open(local_path, 'rb') as f:
+                image_data = f.read()
+            
+            if HAS_PILLOW:
+                image = Image.open(BytesIO(image_data))
+                logger.debug(f"截图成功 (LADB): {image.size}")
+                result = image
+            else:
+                logger.debug(f"截图成功 (LADB): {len(image_data)} bytes (Pillow 不可用)")
+                result = image_data
             
             # 清理临时文件
             subprocess.run(
                 ['adb', '-s', self.adb_device, 'shell', 'rm', '/sdcard/autoglm_screenshot.png'],
                 timeout=3
             )
+            os.remove(local_path)
             
-            return image
+            return result
             
         except Exception as e:
             logger.error(f"截图失败 (LADB): {e}")
