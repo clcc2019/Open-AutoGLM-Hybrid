@@ -82,14 +82,7 @@ pre{white-space:pre-wrap;word-break:break-all}
       </template>
       <div class="space-y-3">
         <template x-for="(info,did) in (status.devices||{})" :key="did">
-          <div class="flex items-start gap-4 bg-gray-50 rounded-lg p-3">
-            <template x-if="info.screenshot_id">
-              <img :src="screenshotUrl(info.screenshot_id)" class="screenshot-thumb"
-                @click="viewingScreenshot=screenshotUrl(info.screenshot_id)" alt="Device screen">
-            </template>
-            <template x-if="!info.screenshot_id">
-              <div class="w-[120px] h-[200px] bg-gray-200 rounded-lg flex items-center justify-center text-xs text-gray-400">无截图</div>
-            </template>
+          <div class="flex items-center justify-between bg-gray-50 rounded-lg p-3">
             <div class="flex-1">
               <div class="flex items-center justify-between mb-1">
                 <span class="font-mono text-sm font-medium" x-text="did"></span>
@@ -448,7 +441,6 @@ function app() {
     chatInput: '',
     chatLoading: false,
     viewingScreenshot: null,
-    deviceScreenTimer: null,
     taskGoal: '',
     activeTask: null,
     taskList: [],
@@ -519,10 +511,6 @@ function app() {
     },
 
     watchTab() {
-      if (this.deviceScreenTimer) { clearInterval(this.deviceScreenTimer); this.deviceScreenTimer = null; }
-      if (this.tab === 'dashboard') {
-        this.deviceScreenTimer = setInterval(() => this.loadStatus(), 5000);
-      }
     },
 
     async loadKnowledge() {
@@ -678,10 +666,6 @@ function app() {
     screenshotUrl(sid) {
       if (!sid) return '';
       return '/api/screenshot/'+sid+'?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
-    },
-
-    deviceScreenUrl(did) {
-      return '/api/device/'+did+'/screenshot?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
     },
 
     formatUptime(s) {

@@ -30,7 +30,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = 30
-STEP_TIMEOUT_S = 120
+MAX_VISION_ERRORS = 3
 
 SCREENSHOT_DIR = Path(os.environ.get("SCREENSHOT_DIR", "tmp/screenshots"))
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,6 +66,7 @@ class Task:
     finished_at: float = 0.0
     steps: list[TaskStep] = field(default_factory=list)
     error: str = ""
+    _consecutive_errors: int = field(default=0, repr=False)
 
     @property
     def current_step(self) -> int:
@@ -174,6 +175,16 @@ def _parse_json(raw: str) -> dict:
     return {}
 
 
+def _try_extract_app_name(goal: str) -> str:
+    """Try to extract an app name from the task goal for the initial launch."""
+    apps = ["闲鱼", "微信", "淘宝", "抖音", "支付宝", "京东", "拼多多", "小红书",
+            "设置", "相机", "浏览器", "地图", "日历", "备忘录", "计算器"]
+    for app in apps:
+        if app in goal:
+            return app
+    return ""
+
+
 def save_screenshot(screenshot_base64: str, prefix: str = "s") -> str:
     """Save base64 screenshot to disk, return the screenshot ID."""
     sid = f"{prefix}-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
@@ -188,6 +199,8 @@ def save_screenshot(screenshot_base64: str, prefix: str = "s") -> str:
 
 
 def get_screenshot_path(screenshot_id: str) -> Path | None:
+    if not screenshot_id:
+        return None
     path = SCREENSHOT_DIR / f"{screenshot_id}.jpg"
     return path if path.exists() else None
 
@@ -198,26 +211,6 @@ class TaskEngine:
     def __init__(self):
         self._tasks: dict[str, Task] = {}
         self._active: dict[str, str] = {}
-        self._device_screenshots: dict[str, str] = {}
-
-    def save_device_screenshot(self, device_id: str, screenshot_base64: str) -> str:
-        """Save the latest screenshot from a device. Called on every poll."""
-        if not screenshot_base64:
-            return ""
-        sid = save_screenshot(screenshot_base64, prefix=f"dev-{device_id}")
-        old_sid = self._device_screenshots.get(device_id)
-        if old_sid:
-            old_path = get_screenshot_path(old_sid)
-            if old_path:
-                try:
-                    old_path.unlink()
-                except OSError:
-                    pass
-        self._device_screenshots[device_id] = sid
-        return sid
-
-    def get_device_screenshot_id(self, device_id: str) -> str:
-        return self._device_screenshots.get(device_id, "")
 
     def create_task(self, device_id: str, goal: str) -> Task:
         existing = self._active.get(device_id)
@@ -287,6 +280,24 @@ class TaskEngine:
             logger.warning("Task [%s] exceeded max steps", task.id)
             return [{"action": "noop"}], 3000
 
+        # First step without screenshot: try to launch the app directly
+        if not screenshot_base64 and task.current_step == 0:
+            app_name = _try_extract_app_name(task.goal)
+            if app_name:
+                step = TaskStep(
+                    step=1,
+                    timestamp=time.time(),
+                    observation="无截图，根据目标直接打开应用",
+                    thought=f"首步无截图，先打开 {app_name}",
+                    commands=[{"action": "launch_app", "app_name": app_name}, {"action": "wait", "ms": 2000}],
+                    status="continue",
+                )
+                task.steps.append(step)
+                logger.info("Task [%s] step 1: auto-launch %s (no screenshot)", task.id, app_name)
+                return step.commands, 2000
+
+            return [{"action": "noop"}], 2000
+
         if not screenshot_base64:
             return [{"action": "noop"}], 2000
 
@@ -295,11 +306,29 @@ class TaskEngine:
         try:
             result = self._ask_vision(task, screenshot_base64)
         except Exception as e:
-            logger.error("Task [%s] vision error: %s", task.id, e)
-            task.status = TaskStatus.FAILED
-            task.finished_at = time.time()
-            task.error = str(e)
-            return [{"action": "noop"}], 3000
+            task._consecutive_errors += 1
+            logger.error("Task [%s] vision error (%d/%d): %s",
+                         task.id, task._consecutive_errors, MAX_VISION_ERRORS, e)
+
+            if task._consecutive_errors >= MAX_VISION_ERRORS:
+                task.status = TaskStatus.FAILED
+                task.finished_at = time.time()
+                task.error = f"Vision API failed {MAX_VISION_ERRORS} times: {e}"
+                return [{"action": "noop"}], 3000
+
+            step = TaskStep(
+                step=task.current_step + 1,
+                timestamp=time.time(),
+                observation=f"Vision API 错误: {str(e)[:100]}",
+                thought=f"第 {task._consecutive_errors} 次错误，等待重试",
+                commands=[],
+                status="error_retry",
+                screenshot_id=screenshot_id,
+            )
+            task.steps.append(step)
+            return [{"action": "wait", "ms": 2000}], 3000
+
+        task._consecutive_errors = 0
 
         if not result:
             return [{"action": "noop"}], 2000

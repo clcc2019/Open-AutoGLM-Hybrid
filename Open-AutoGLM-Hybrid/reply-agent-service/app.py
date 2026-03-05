@@ -205,9 +205,6 @@ async def phone_poll(req: PhonePollRequest):
     """
     _device_last_seen[req.device_id] = time.time()
 
-    if req.screenshot:
-        task_engine.save_device_screenshot(req.device_id, req.screenshot)
-
     # --- Priority 1: drain manual command queue ---
     queued = _command_queue.get(req.device_id)
     if queued:
@@ -335,7 +332,6 @@ async def admin_status():
         did: {
             "last_seen_ago_s": round(now - ts, 1),
             "queue_depth": len(_command_queue.get(did, [])),
-            "screenshot_id": task_engine.get_device_screenshot_id(did),
         }
         for did, ts in _device_last_seen.items()
     }
@@ -531,13 +527,3 @@ async def screenshot_get(screenshot_id: str):
     return FileResponse(path, media_type="image/jpeg")
 
 
-@app.get("/api/device/{device_id}/screenshot")
-async def device_screenshot(device_id: str):
-    """Get the latest screenshot from a device."""
-    sid = task_engine.get_device_screenshot_id(device_id)
-    if not sid:
-        raise HTTPException(status_code=404, detail="No screenshot available for this device")
-    path = get_screenshot_path(sid)
-    if not path:
-        raise HTTPException(status_code=404, detail="Screenshot file not found")
-    return FileResponse(path, media_type="image/jpeg")
