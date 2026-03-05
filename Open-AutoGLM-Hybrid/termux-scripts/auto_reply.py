@@ -5,7 +5,7 @@ replies using the remote Agno Reply Agent service.
 
 Usage:
     python auto_reply.py                    # interactive config
-    python auto_reply.py --agent-url http://server:7777
+    python auto_reply.py --agent-url http://server:8080
     python auto_reply.py --app xianyu --interval 5
 """
 
@@ -269,7 +269,7 @@ def run_auto_reply(
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-reply mode for Xianyu/e-commerce")
-    parser.add_argument("--agent-url", default="http://localhost:7777",
+    parser.add_argument("--agent-url", default="http://localhost:8080",
                         help="Agno Reply Agent service URL")
     parser.add_argument("--interval", type=float, default=5.0,
                         help="Check interval in seconds (default: 5)")

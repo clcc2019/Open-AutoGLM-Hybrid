@@ -157,7 +157,7 @@ async def quick_reply(req: QuickReplyRequest):
         message = f"买家消息: {message}"
 
     try:
-        response = reply_agent.run(message=message, user_id=req.buyer_id, session_id=session_id)
+        response = reply_agent.run(input=message, user_id=req.buyer_id, session_id=session_id)
         reply_text = response.content if response else "亲，稍等一下哈～"
         return QuickReplyResponse(reply=reply_text, session_id=session_id)
     except Exception as e:
@@ -232,7 +232,7 @@ async def phone_poll(req: PhonePollRequest):
         if product:
             message = f"[商品: {product}]\n{message}"
 
-        response = reply_agent.run(message=message, user_id=buyer_name, session_id=session_id)
+        response = reply_agent.run(input=message, user_id=buyer_name, session_id=session_id)
         reply_text = response.content if response else "亲，稍等一下哈～"
     except Exception as e:
         logger.error("Agent reply failed: %s", e)
