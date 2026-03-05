@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     # --- Security ---
     api_key: str = Field(default="", description="API key for authentication (empty = no auth)")
+    api_path_prefix: str = Field(default="/api", description="Custom API path prefix to obscure endpoints (e.g. /x3k9)")
+    rate_limit_rpm: int = Field(default=120, description="Max requests per minute per IP (0 = disabled)")
+    admin_path: str = Field(default="/admin", description="Custom admin page path (e.g. /mgmt-x7)")
 
     # --- Business ---
     min_price_ratio: float = Field(default=0.8, description="Minimum acceptable price ratio for bargaining")

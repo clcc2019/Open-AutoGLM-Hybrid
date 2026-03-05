@@ -18,25 +18,6 @@ pre{white-space:pre-wrap;word-break:break-all}
 </head>
 <body class="bg-gray-50 text-gray-800 min-h-screen" x-data="app()" x-init="init()" x-cloak>
 
-<!-- Auth Gate -->
-<template x-if="!authenticated">
-<div class="flex items-center justify-center min-h-screen">
-  <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-sm">
-    <h1 class="text-xl font-bold mb-1">AutoGLM Agent Console</h1>
-    <p class="text-sm text-gray-500 mb-6">输入 API Key 登录管理后台</p>
-    <input x-model="loginKey" type="password" placeholder="API Key"
-      class="w-full border rounded-lg px-4 py-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-400"
-      @keydown.enter="doLogin()">
-    <button @click="doLogin()" class="w-full bg-blue-500 text-white rounded-lg py-2.5 font-medium hover:bg-blue-600 transition">
-      登录
-    </button>
-    <p x-show="loginError" class="text-red-500 text-sm mt-3" x-text="loginError"></p>
-  </div>
-</div>
-</template>
-
-<!-- Main App -->
-<template x-if="authenticated">
 <div class="max-w-6xl mx-auto px-4 py-6">
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
@@ -50,7 +31,7 @@ pre{white-space:pre-wrap;word-break:break-all}
   <!-- Tabs -->
   <div class="flex border-b mb-6 gap-1 overflow-x-auto">
     <template x-for="t in tabs" :key="t.id">
-      <button @click="tab=t.id;watchTab()" :class="tab===t.id?'tab-active':'text-gray-500 hover:text-gray-700'"
+      <button @click="tab=t.id" :class="tab===t.id?'tab-active':'text-gray-500 hover:text-gray-700'"
         class="px-4 py-2.5 text-sm whitespace-nowrap transition" x-text="t.label"></button>
     </template>
   </div>
@@ -125,7 +106,6 @@ pre{white-space:pre-wrap;word-break:break-all}
       </div>
     </div>
 
-    <!-- Editor Modal -->
     <template x-if="kbEditing">
     <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -153,7 +133,6 @@ pre{white-space:pre-wrap;word-break:break-all}
     </div>
     </template>
 
-    <!-- Document List -->
     <div class="bg-white rounded-lg shadow-sm overflow-hidden">
       <template x-if="kbDocs.length===0">
         <p class="text-gray-400 text-sm p-6">暂无知识文档</p>
@@ -197,7 +176,6 @@ pre{white-space:pre-wrap;word-break:break-all}
       </button>
     </div>
 
-    <!-- Send message -->
     <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
       <h3 class="font-semibold mb-3">发送消息</h3>
       <div class="flex gap-2">
@@ -207,7 +185,6 @@ pre{white-space:pre-wrap;word-break:break-all}
       </div>
     </div>
 
-    <!-- Custom command -->
     <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
       <h3 class="font-semibold mb-3">自定义指令 (JSON)</h3>
       <textarea x-model="cmdJson" rows="3" placeholder='[{"action":"tap","x":540,"y":1200}]'
@@ -215,13 +192,11 @@ pre{white-space:pre-wrap;word-break:break-all}
       <button @click="sendRawCommand()" class="px-4 py-2 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800">执行</button>
     </div>
 
-    <!-- Device selector -->
     <div class="bg-white rounded-lg p-5 shadow-sm">
       <h3 class="font-semibold mb-3">目标设备</h3>
       <input x-model="cmdDevice" class="border rounded-lg px-3 py-2 text-sm w-60" placeholder="phone-1">
     </div>
 
-    <!-- Result -->
     <template x-if="cmdResult">
     <div class="mt-4 bg-white rounded-lg p-5 shadow-sm">
       <h3 class="font-semibold mb-2">执行结果</h3>
@@ -260,7 +235,6 @@ pre{white-space:pre-wrap;word-break:break-all}
   <div x-show="tab==='task'" x-transition>
     <h2 class="text-lg font-semibold mb-4">任务执行</h2>
 
-    <!-- Create Task -->
     <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
       <h3 class="font-semibold mb-3">下发新任务</h3>
       <p class="text-xs text-gray-500 mb-3">输入自然语言描述的任务目标，Vision LLM 会自动截图分析并逐步执行操作，直到完成。</p>
@@ -278,7 +252,6 @@ pre{white-space:pre-wrap;word-break:break-all}
       </div>
     </div>
 
-    <!-- Active Task -->
     <template x-if="activeTask">
     <div class="bg-white rounded-lg p-5 shadow-sm mb-4 border-l-4"
       :class="activeTask.status==='running'?'border-blue-500':activeTask.status==='completed'?'border-green-500':activeTask.status==='failed'?'border-red-500':'border-gray-300'">
@@ -304,7 +277,6 @@ pre{white-space:pre-wrap;word-break:break-all}
         </template>
       </div>
 
-      <!-- Step Log -->
       <div class="space-y-2 max-h-[500px] overflow-y-auto" x-ref="taskLog">
         <template x-for="s in activeTask.steps" :key="s.step">
           <div class="bg-gray-50 rounded-lg p-3 text-xs">
@@ -334,7 +306,6 @@ pre{white-space:pre-wrap;word-break:break-all}
     </div>
     </template>
 
-    <!-- Task History -->
     <div class="bg-white rounded-lg p-5 shadow-sm">
       <div class="flex justify-between items-center mb-3">
         <h3 class="font-semibold">历史任务</h3>
@@ -411,15 +382,11 @@ pre{white-space:pre-wrap;word-break:break-all}
   <div x-show="toast" x-transition class="fixed bottom-6 right-6 bg-gray-800 text-white px-5 py-3 rounded-lg shadow-lg text-sm z-50"
     x-text="toast"></div>
 </div>
-</template>
 
 <script>
 function app() {
+  const API = '/api';
   return {
-    authenticated: false,
-    loginKey: '',
-    loginError: '',
-    apiKey: '',
     tab: 'dashboard',
     tabs: [
       {id:'dashboard',label:'仪表盘'},
@@ -430,6 +397,7 @@ function app() {
       {id:'settings',label:'设置'},
     ],
     toast: '',
+    apiKey: '',
     status: {},
     kbDocs: [],
     kbEditing: null,
@@ -449,53 +417,36 @@ function app() {
     cfgEdit: {min_price_ratio:0.8, auto_escalate_keywords:''},
 
     init() {
-      const saved = localStorage.getItem('autoglm_api_key');
-      if (saved) {
-        this.apiKey = saved;
-        this.authenticated = true;
-        this.refresh();
-      }
-    },
-
-    async doLogin() {
-      this.loginError = '';
-      try {
-        const r = await this.api('/api/admin/status');
-        if (r.ok) {
-          this.apiKey = this.loginKey;
-          localStorage.setItem('autoglm_api_key', this.apiKey);
-          this.authenticated = true;
-          this.refresh();
-        } else if (r.status === 401) {
-          this.loginError = 'API Key 无效';
-        } else {
-          this.loginError = '连接失败: HTTP ' + r.status;
-        }
-      } catch(e) {
-        this.loginError = '连接失败: ' + e.message;
-      }
+      this.apiKey = localStorage.getItem('autoglm_api_key') || '';
+      this.refresh();
     },
 
     logout() {
       localStorage.removeItem('autoglm_api_key');
-      this.authenticated = false;
-      this.apiKey = '';
-      this.loginKey = '';
+      document.cookie = 'api_key=; path=/; max-age=0';
+      window.location.href = '/login';
     },
 
     async api(path, opts={}) {
-      const headers = {...(opts.headers||{}), 'X-API-Key': this.apiKey || this.loginKey};
+      const headers = {...(opts.headers||{}), 'X-API-Key': this.apiKey};
       if (opts.body && typeof opts.body === 'object') {
         headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(opts.body);
       }
-      return fetch(path, {...opts, headers});
+      return fetch(API + path, {...opts, headers});
     },
 
     async apiJson(path, opts={}) {
-      const r = await this.api(path, opts);
-      if (r.status === 401) { this.logout(); return null; }
-      return r.json();
+      try {
+        const r = await this.api(path, opts);
+        if (r.status === 404 && !r.headers.get('content-type')?.includes('json')) {
+          this.logout();
+          return null;
+        }
+        return r.json();
+      } catch(e) {
+        return null;
+      }
     },
 
     async refresh() {
@@ -506,20 +457,17 @@ function app() {
     },
 
     async loadStatus() {
-      const d = await this.apiJson('/api/admin/status');
+      const d = await this.apiJson('/admin/status');
       if (d) this.status = d;
     },
 
-    watchTab() {
-    },
-
     async loadKnowledge() {
-      const d = await this.apiJson('/api/admin/knowledge');
+      const d = await this.apiJson('/admin/knowledge');
       if (d) this.kbDocs = d.documents || [];
     },
 
     async loadSettings() {
-      const d = await this.apiJson('/api/admin/settings');
+      const d = await this.apiJson('/admin/settings');
       if (d) {
         this.cfgData = d;
         this.cfgEdit.min_price_ratio = d.min_price_ratio;
@@ -528,14 +476,14 @@ function app() {
     },
 
     async reloadKnowledge() {
-      await this.apiJson('/api/knowledge/reload', {method:'POST'});
+      await this.apiJson('/knowledge/reload', {method:'POST'});
       await this.loadKnowledge();
       await this.loadStatus();
       this.showToast('知识库已重新加载');
     },
 
     async editKnowledge(doc) {
-      const d = await this.apiJson('/api/admin/knowledge/'+doc.path);
+      const d = await this.apiJson('/admin/knowledge/'+doc.path);
       if (d) this.kbEditing = {path:doc.path, content:d.content, category:doc.category, isNew:false};
     },
 
@@ -543,7 +491,7 @@ function app() {
       const e = this.kbEditing;
       if (!e) return;
       const method = e.isNew ? 'POST' : 'PUT';
-      const r = await this.apiJson('/api/admin/knowledge/'+e.path, {method, body:{content:e.content, category:e.category}});
+      const r = await this.apiJson('/admin/knowledge/'+e.path, {method, body:{content:e.content, category:e.category}});
       if (r) {
         this.kbEditing = null;
         await this.loadKnowledge();
@@ -554,14 +502,14 @@ function app() {
 
     async deleteKnowledge(doc) {
       if (!confirm('确定删除 '+doc.path+'？')) return;
-      await this.apiJson('/api/admin/knowledge/'+doc.path, {method:'DELETE'});
+      await this.apiJson('/admin/knowledge/'+doc.path, {method:'DELETE'});
       await this.loadKnowledge();
       await this.loadStatus();
       this.showToast('文档已删除');
     },
 
     async sendShortcut(shortcut, params={}) {
-      const d = await this.apiJson('/api/phone/command', {method:'POST', body:{device_id:this.cmdDevice, shortcut, params}});
+      const d = await this.apiJson('/phone/command', {method:'POST', body:{device_id:this.cmdDevice, shortcut, params}});
       this.cmdResult = d;
       this.showToast('指令已入队');
     },
@@ -575,7 +523,7 @@ function app() {
     async sendRawCommand() {
       try {
         const cmds = JSON.parse(this.cmdJson);
-        const d = await this.apiJson('/api/phone/command', {method:'POST', body:{device_id:this.cmdDevice, commands:cmds}});
+        const d = await this.apiJson('/phone/command', {method:'POST', body:{device_id:this.cmdDevice, commands:cmds}});
         this.cmdResult = d;
         this.showToast('指令已入队');
       } catch(e) {
@@ -591,7 +539,7 @@ function app() {
       this.chatLoading = true;
       this.$nextTick(()=>{document.getElementById('chatBox').scrollTop=99999});
       try {
-        const d = await this.apiJson('/api/quick-reply', {method:'POST', body:{buyer_message:msg}});
+        const d = await this.apiJson('/quick-reply', {method:'POST', body:{buyer_message:msg}});
         if (d) this.chatMessages.push({role:'agent', text:d.reply});
       } catch(e) {
         this.chatMessages.push({role:'agent', text:'[错误] '+e.message});
@@ -602,7 +550,7 @@ function app() {
 
     async createTask() {
       if (!this.taskGoal.trim()) return;
-      const d = await this.apiJson('/api/task', {method:'POST', body:{device_id:this.cmdDevice, goal:this.taskGoal}});
+      const d = await this.apiJson('/task', {method:'POST', body:{device_id:this.cmdDevice, goal:this.taskGoal}});
       if (d) {
         this.activeTask = d;
         this.taskGoal = '';
@@ -613,12 +561,12 @@ function app() {
     },
 
     async loadTasks() {
-      const d = await this.apiJson('/api/tasks?limit=20');
+      const d = await this.apiJson('/tasks?limit=20');
       if (d) this.taskList = d.tasks || [];
     },
 
     async viewTask(taskId) {
-      const d = await this.apiJson('/api/task/'+taskId);
+      const d = await this.apiJson('/task/'+taskId);
       if (d) {
         this.activeTask = d;
         if (d.status==='running'||d.status==='pending') this.startTaskPoll(taskId);
@@ -628,7 +576,7 @@ function app() {
 
     async refreshTask() {
       if (!this.activeTask) return;
-      const d = await this.apiJson('/api/task/'+this.activeTask.id);
+      const d = await this.apiJson('/task/'+this.activeTask.id);
       if (d) {
         this.activeTask = d;
         if (d.status!=='running'&&d.status!=='pending') {
@@ -640,7 +588,7 @@ function app() {
     },
 
     async cancelTask(taskId) {
-      await this.apiJson('/api/task/'+taskId+'/cancel', {method:'POST'});
+      await this.apiJson('/task/'+taskId+'/cancel', {method:'POST'});
       this.refreshTask();
       this.loadTasks();
       this.showToast('任务已取消');
@@ -656,7 +604,7 @@ function app() {
     },
 
     async saveSettings() {
-      const d = await this.apiJson('/api/admin/settings', {method:'PUT', body:this.cfgEdit});
+      const d = await this.apiJson('/admin/settings', {method:'PUT', body:this.cfgEdit});
       if (d) {
         await this.loadSettings();
         this.showToast('设置已保存');
@@ -665,7 +613,7 @@ function app() {
 
     screenshotUrl(sid) {
       if (!sid) return '';
-      return '/api/screenshot/'+sid+'?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
+      return API+'/screenshot/'+sid+'?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
     },
 
     formatUptime(s) {

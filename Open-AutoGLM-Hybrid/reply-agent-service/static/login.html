@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;color:#1e293b}
+.card{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.08);padding:2.5rem;width:100%;max-width:380px}
+h1{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}
+.sub{font-size:.875rem;color:#64748b;margin-bottom:1.5rem}
+input{width:100%;border:1px solid #e2e8f0;border-radius:10px;padding:.75rem 1rem;font-size:.9rem;outline:none;transition:border-color .2s}
+input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+button{width:100%;background:#3b82f6;color:#fff;border:none;border-radius:10px;padding:.75rem;font-size:.9rem;font-weight:600;cursor:pointer;margin-top:1rem;transition:background .2s}
+button:hover{background:#2563eb}
+button:disabled{opacity:.6;cursor:not-allowed}
+.err{color:#ef4444;font-size:.8rem;margin-top:.75rem;display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Agent Console</h1>
+  <p class="sub">输入密钥登录</p>
+  <input id="key" type="password" placeholder="API Key" autofocus>
+  <button id="btn" onclick="doLogin()">登录</button>
+  <p class="err" id="err"></p>
+</div>
+<script>
+document.getElementById('key').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()});
+async function doLogin(){
+  var k=document.getElementById('key').value.trim();
+  var btn=document.getElementById('btn');
+  var err=document.getElementById('err');
+  if(!k){err.textContent='请输入 API Key';err.style.display='block';return}
+  btn.disabled=true;err.style.display='none';
+  try{
+    var r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
+    var d=await r.json();
+    if(d.ok){
+      localStorage.setItem('autoglm_api_key',k);
+      window.location.href=d.admin_path||'/admin';
+    }else{
+      err.textContent='密钥无效';err.style.display='block';
+    }
+  }catch(e){
+    err.textContent='连接失败: '+e.message;err.style.display='block';
+  }
+  btn.disabled=false;
+}
+</script>
+</body>
+</html>

@@ -7,8 +7,8 @@ Start:
 from __future__ import annotations
 
 import logging
-import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from agno.db.sqlite import SqliteDb
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from agent import create_reply_agent, load_knowledge
 from config import settings
@@ -36,6 +36,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _start_time = time.time()
+
+_P = settings.api_path_prefix.rstrip("/")
+_ADMIN = settings.admin_path.rstrip("/")
 
 # ---------------------------------------------------------------------------
 # 1. Database
@@ -58,29 +61,90 @@ reply_agent = create_reply_agent(db=db)
 agent_os = AgentOS(agents=[reply_agent], db=db)
 app = agent_os.get_app()
 
+# Disable OpenAPI docs to hide API surface from scanners
+app.openapi_url = None
+app.docs_url = None
+app.redoc_url = None
+
 # ---------------------------------------------------------------------------
-# 4. API Key Authentication Middleware
+# 4. Security Middleware
 # ---------------------------------------------------------------------------
-_AUTH_WHITELIST = ("/api/health", "/admin", "/static", "/docs", "/openapi.json", "/favicon.ico")
+_ALLOWED_PREFIXES = (
+    f"{_P}/",
+    f"{_ADMIN}",
+    "/static/",
+    "/favicon.ico",
+    "/login",
+)
+
+_RATE_BUCKETS: dict[str, list[float]] = defaultdict(list)
+_BLOCKED_IPS: dict[str, float] = {}
+_BLOCK_DURATION = 300
+_404_BODY = b""
 
 
-class ApiKeyMiddleware(BaseHTTPMiddleware):
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if not settings.api_key:
-            return await call_next(request)
+        client_ip = _get_client_ip(request)
+        now = time.time()
+
+        # --- IP block check ---
+        blocked_until = _BLOCKED_IPS.get(client_ip, 0)
+        if now < blocked_until:
+            return Response(status_code=404, content=_404_BODY)
+
+        # --- Rate limiting ---
+        if settings.rate_limit_rpm > 0:
+            bucket = _RATE_BUCKETS[client_ip]
+            cutoff = now - 60
+            _RATE_BUCKETS[client_ip] = bucket = [t for t in bucket if t > cutoff]
+            if len(bucket) >= settings.rate_limit_rpm:
+                _BLOCKED_IPS[client_ip] = now + _BLOCK_DURATION
+                logger.warning("Rate limit exceeded, blocking IP %s for %ds", client_ip, _BLOCK_DURATION)
+                return Response(status_code=404, content=_404_BODY)
+            bucket.append(now)
 
         path = request.url.path
-        if any(path.startswith(p) for p in _AUTH_WHITELIST):
-            return await call_next(request)
 
-        key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-        if key != settings.api_key:
-            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+        # --- Block all paths not matching our allowed prefixes ---
+        if not any(path.startswith(p) for p in _ALLOWED_PREFIXES):
+            return Response(status_code=404, content=_404_BODY)
 
-        return await call_next(request)
+        # --- API Key authentication for all API endpoints ---
+        if settings.api_key and path.startswith(f"{_P}/"):
+            key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            if key != settings.api_key:
+                return Response(status_code=404, content=_404_BODY)
+
+        # --- Admin page requires auth too ---
+        if settings.api_key and path.startswith(f"{_ADMIN}"):
+            key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            cookie_key = request.cookies.get("api_key")
+            if key != settings.api_key and cookie_key != settings.api_key:
+                return Response(status_code=404, content=_404_BODY)
+
+        response = await call_next(request)
+
+        # --- Security headers ---
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        if "server" in response.headers:
+            del response.headers["server"]
+
+        return response
 
 
-app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(SecurityMiddleware)
 
 # ---------------------------------------------------------------------------
 # 5. Static files + Admin page
@@ -91,13 +155,32 @@ STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-@app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
-@app.get("/admin/{rest:path}", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def login_page():
+    login_html = STATIC_DIR / "login.html"
+    if login_html.exists():
+        return FileResponse(login_html)
+    return HTMLResponse("<h1>Not found</h1>", status_code=404)
+
+
+@app.post("/login", include_in_schema=False)
+async def login_verify(request: Request):
+    body = await request.json()
+    key = body.get("key", "")
+    if not settings.api_key or key == settings.api_key:
+        response = JSONResponse({"ok": True, "admin_path": _ADMIN})
+        response.set_cookie("api_key", key, httponly=True, samesite="strict", max_age=86400 * 7)
+        return response
+    return JSONResponse({"ok": False}, status_code=401)
+
+
+@app.get(f"{_ADMIN}", response_class=HTMLResponse, include_in_schema=False)
+@app.get(f"{_ADMIN}/{{rest:path}}", response_class=HTMLResponse, include_in_schema=False)
 async def admin_page(rest: str = ""):
     index = STATIC_DIR / "index.html"
     if index.exists():
         return FileResponse(index)
-    return HTMLResponse("<h1>Admin UI not found</h1><p>Place index.html in static/</p>", status_code=404)
+    return HTMLResponse("<h1>Not found</h1>", status_code=404)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +193,9 @@ async def _startup():
     logger.info("  Embedding: %s", settings.embedding_model)
     logger.info("  Database: %s", "PostgreSQL" if settings.is_postgres else "SQLite")
     logger.info("  Auth: %s", "enabled" if settings.api_key else "disabled (no API_KEY set)")
+    logger.info("  API prefix: %s", _P)
+    logger.info("  Admin path: %s", _ADMIN)
+    logger.info("  Rate limit: %d rpm", settings.rate_limit_rpm)
 
     count = load_knowledge(reply_agent)
     logger.info("  Knowledge: %d documents loaded", count)
@@ -121,16 +207,11 @@ async def _startup():
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# Health
+# Health (requires auth)
 # ---------------------------------------------------------------------------
-@app.get("/api/health")
+@app.get(f"{_P}/health")
 async def health():
-    return {
-        "status": "ok",
-        "agent": reply_agent.id,
-        "model": settings.llm_model,
-        "auth_enabled": bool(settings.api_key),
-    }
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +229,7 @@ class QuickReplyResponse(BaseModel):
     session_id: str
 
 
-@app.post("/api/quick-reply", response_model=QuickReplyResponse)
+@app.post(f"{_P}/quick-reply", response_model=QuickReplyResponse)
 async def quick_reply(req: QuickReplyRequest):
     session_id = req.session_id or f"xianyu-{req.buyer_id}"
     message = req.buyer_message
@@ -166,7 +247,7 @@ async def quick_reply(req: QuickReplyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/knowledge/reload")
+@app.post(f"{_P}/knowledge/reload")
 async def reload_knowledge():
     count = load_knowledge(reply_agent)
     return {"reloaded": True, "documents": count}
@@ -194,7 +275,7 @@ class PhonePollResponse(BaseModel):
     next_poll_ms: int = 3000
 
 
-@app.post("/api/phone/poll", response_model=PhonePollResponse)
+@app.post(f"{_P}/phone/poll", response_model=PhonePollResponse)
 async def phone_poll(req: PhonePollRequest):
     """Phone APP polls this endpoint.
 
@@ -278,7 +359,7 @@ class PhoneCommandRequest(BaseModel):
     params: dict | None = None
 
 
-@app.post("/api/phone/command")
+@app.post(f"{_P}/phone/command")
 async def phone_command(req: PhoneCommandRequest):
     if req.commands:
         cmds = req.commands
@@ -303,7 +384,7 @@ async def phone_command(req: PhoneCommandRequest):
     }
 
 
-@app.get("/api/phone/commands/{device_id}")
+@app.get(f"{_P}/phone/commands/{{device_id}}")
 async def phone_commands(device_id: str):
     queued = _command_queue.get(device_id, [])
     return {"device_id": device_id, "queue_depth": len(queued), "pending": queued}
@@ -324,7 +405,7 @@ def _mask_key(key: str) -> str:
 # ---------------------------------------------------------------------------
 # Admin: Status
 # ---------------------------------------------------------------------------
-@app.get("/api/admin/status")
+@app.get(f"{_P}/admin/status")
 async def admin_status():
     docs = list(KNOWLEDGE_DIR.rglob("*.md")) if KNOWLEDGE_DIR.exists() else []
     now = time.time()
@@ -359,7 +440,7 @@ async def admin_status():
 # ---------------------------------------------------------------------------
 # Admin: Knowledge CRUD
 # ---------------------------------------------------------------------------
-@app.get("/api/admin/knowledge")
+@app.get(f"{_P}/admin/knowledge")
 async def admin_knowledge_list():
     if not KNOWLEDGE_DIR.exists():
         return {"documents": []}
@@ -376,7 +457,7 @@ async def admin_knowledge_list():
     return {"documents": docs}
 
 
-@app.get("/api/admin/knowledge/{doc_path:path}")
+@app.get(f"{_P}/admin/knowledge/{{doc_path:path}}")
 async def admin_knowledge_get(doc_path: str):
     target = KNOWLEDGE_DIR / doc_path
     if not target.suffix:
@@ -394,7 +475,7 @@ class KnowledgeWriteRequest(BaseModel):
     category: str = "general"
 
 
-@app.post("/api/admin/knowledge/{doc_path:path}")
+@app.post(f"{_P}/admin/knowledge/{{doc_path:path}}")
 async def admin_knowledge_create(doc_path: str, req: KnowledgeWriteRequest):
     target = KNOWLEDGE_DIR / doc_path
     if not target.suffix:
@@ -407,7 +488,7 @@ async def admin_knowledge_create(doc_path: str, req: KnowledgeWriteRequest):
     return {"created": str(target.relative_to(KNOWLEDGE_DIR)), "knowledge_reloaded": count}
 
 
-@app.put("/api/admin/knowledge/{doc_path:path}")
+@app.put(f"{_P}/admin/knowledge/{{doc_path:path}}")
 async def admin_knowledge_update(doc_path: str, req: KnowledgeWriteRequest):
     target = KNOWLEDGE_DIR / doc_path
     if not target.suffix:
@@ -419,7 +500,7 @@ async def admin_knowledge_update(doc_path: str, req: KnowledgeWriteRequest):
     return {"updated": str(target.relative_to(KNOWLEDGE_DIR)), "knowledge_reloaded": count}
 
 
-@app.delete("/api/admin/knowledge/{doc_path:path}")
+@app.delete(f"{_P}/admin/knowledge/{{doc_path:path}}")
 async def admin_knowledge_delete(doc_path: str):
     target = KNOWLEDGE_DIR / doc_path
     if not target.suffix:
@@ -434,7 +515,7 @@ async def admin_knowledge_delete(doc_path: str):
 # ---------------------------------------------------------------------------
 # Admin: Settings
 # ---------------------------------------------------------------------------
-@app.get("/api/admin/settings")
+@app.get(f"{_P}/admin/settings")
 async def admin_settings_get():
     return {
         "llm_provider": settings.llm_provider,
@@ -457,7 +538,7 @@ class SettingsUpdateRequest(BaseModel):
     auto_escalate_keywords: str | None = None
 
 
-@app.put("/api/admin/settings")
+@app.put(f"{_P}/admin/settings")
 async def admin_settings_update(req: SettingsUpdateRequest):
     updated = {}
     if req.min_price_ratio is not None:
@@ -480,20 +561,15 @@ class TaskCreateRequest(BaseModel):
     goal: str
 
 
-@app.post("/api/task")
+@app.post(f"{_P}/task")
 async def task_create(req: TaskCreateRequest):
-    """Create a new task for a device.
-
-    The task will be picked up on the next phone poll and driven by the
-    Vision LLM until completion, failure, or cancellation.
-    """
     if not req.goal.strip():
         raise HTTPException(status_code=400, detail="Goal is required")
     task = task_engine.create_task(req.device_id, req.goal.strip())
     return task.to_dict()
 
 
-@app.get("/api/task/{task_id}")
+@app.get(f"{_P}/task/{{task_id}}")
 async def task_get(task_id: str):
     task = task_engine.get_task(task_id)
     if not task:
@@ -501,7 +577,7 @@ async def task_get(task_id: str):
     return task.to_dict()
 
 
-@app.post("/api/task/{task_id}/cancel")
+@app.post(f"{_P}/task/{{task_id}}/cancel")
 async def task_cancel(task_id: str):
     ok = task_engine.cancel_task(task_id)
     if not ok:
@@ -509,7 +585,7 @@ async def task_cancel(task_id: str):
     return {"cancelled": True, "task_id": task_id}
 
 
-@app.get("/api/tasks")
+@app.get(f"{_P}/tasks")
 async def task_list(device_id: str | None = None, limit: int = 20):
     return {"tasks": task_engine.list_tasks(device_id=device_id, limit=limit)}
 
@@ -518,12 +594,9 @@ async def task_list(device_id: str | None = None, limit: int = 20):
 # Screenshot API
 # ===========================================================================
 
-@app.get("/api/screenshot/{screenshot_id}")
+@app.get(f"{_P}/screenshot/{{screenshot_id}}")
 async def screenshot_get(screenshot_id: str):
-    """Serve a saved screenshot image by its ID."""
     path = get_screenshot_path(screenshot_id)
     if not path:
         raise HTTPException(status_code=404, detail="Screenshot not found")
     return FileResponse(path, media_type="image/jpeg")
-
-
