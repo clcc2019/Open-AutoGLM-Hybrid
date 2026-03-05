@@ -27,7 +27,7 @@ from phone_controller import (
     build_reply_commands,
     build_shortcut_commands,
 )
-from task_engine import task_engine
+from task_engine import task_engine, get_screenshot_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -205,6 +205,9 @@ async def phone_poll(req: PhonePollRequest):
     """
     _device_last_seen[req.device_id] = time.time()
 
+    if req.screenshot:
+        task_engine.save_device_screenshot(req.device_id, req.screenshot)
+
     # --- Priority 1: drain manual command queue ---
     queued = _command_queue.get(req.device_id)
     if queued:
@@ -329,7 +332,11 @@ async def admin_status():
     docs = list(KNOWLEDGE_DIR.rglob("*.md")) if KNOWLEDGE_DIR.exists() else []
     now = time.time()
     devices = {
-        did: {"last_seen_ago_s": round(now - ts, 1), "queue_depth": len(_command_queue.get(did, []))}
+        did: {
+            "last_seen_ago_s": round(now - ts, 1),
+            "queue_depth": len(_command_queue.get(did, [])),
+            "screenshot_id": task_engine.get_device_screenshot_id(did),
+        }
         for did, ts in _device_last_seen.items()
     }
     active_tasks = {}
@@ -509,3 +516,28 @@ async def task_cancel(task_id: str):
 @app.get("/api/tasks")
 async def task_list(device_id: str | None = None, limit: int = 20):
     return {"tasks": task_engine.list_tasks(device_id=device_id, limit=limit)}
+
+
+# ===========================================================================
+# Screenshot API
+# ===========================================================================
+
+@app.get("/api/screenshot/{screenshot_id}")
+async def screenshot_get(screenshot_id: str):
+    """Serve a saved screenshot image by its ID."""
+    path = get_screenshot_path(screenshot_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/api/device/{device_id}/screenshot")
+async def device_screenshot(device_id: str):
+    """Get the latest screenshot from a device."""
+    sid = task_engine.get_device_screenshot_id(device_id)
+    if not sid:
+        raise HTTPException(status_code=404, detail="No screenshot available for this device")
+    path = get_screenshot_path(sid)
+    if not path:
+        raise HTTPException(status_code=404, detail="Screenshot file not found")
+    return FileResponse(path, media_type="image/jpeg")

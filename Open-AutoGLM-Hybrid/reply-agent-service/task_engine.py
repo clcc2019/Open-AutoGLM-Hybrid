@@ -12,12 +12,15 @@ device, the poll handler delegates to TaskEngine instead of the auto-reply path.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -28,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 30
 STEP_TIMEOUT_S = 120
+
+SCREENSHOT_DIR = Path(os.environ.get("SCREENSHOT_DIR", "tmp/screenshots"))
+SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class TaskStatus(str, Enum):
@@ -46,6 +52,7 @@ class TaskStep:
     thought: str
     commands: list[dict]
     status: str = ""
+    screenshot_id: str = ""
 
 
 @dataclass
@@ -82,6 +89,7 @@ class Task:
                     "thought": s.thought,
                     "commands": s.commands,
                     "status": s.status,
+                    "screenshot_id": s.screenshot_id,
                 }
                 for s in self.steps
             ],
@@ -166,12 +174,50 @@ def _parse_json(raw: str) -> dict:
     return {}
 
 
+def save_screenshot(screenshot_base64: str, prefix: str = "s") -> str:
+    """Save base64 screenshot to disk, return the screenshot ID."""
+    sid = f"{prefix}-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
+    path = SCREENSHOT_DIR / f"{sid}.jpg"
+    try:
+        data = base64.b64decode(screenshot_base64)
+        path.write_bytes(data)
+    except Exception as e:
+        logger.warning("Failed to save screenshot %s: %s", sid, e)
+        return ""
+    return sid
+
+
+def get_screenshot_path(screenshot_id: str) -> Path | None:
+    path = SCREENSHOT_DIR / f"{screenshot_id}.jpg"
+    return path if path.exists() else None
+
+
 class TaskEngine:
     """Manages active tasks per device."""
 
     def __init__(self):
         self._tasks: dict[str, Task] = {}
         self._active: dict[str, str] = {}
+        self._device_screenshots: dict[str, str] = {}
+
+    def save_device_screenshot(self, device_id: str, screenshot_base64: str) -> str:
+        """Save the latest screenshot from a device. Called on every poll."""
+        if not screenshot_base64:
+            return ""
+        sid = save_screenshot(screenshot_base64, prefix=f"dev-{device_id}")
+        old_sid = self._device_screenshots.get(device_id)
+        if old_sid:
+            old_path = get_screenshot_path(old_sid)
+            if old_path:
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
+        self._device_screenshots[device_id] = sid
+        return sid
+
+    def get_device_screenshot_id(self, device_id: str) -> str:
+        return self._device_screenshots.get(device_id, "")
 
     def create_task(self, device_id: str, goal: str) -> Task:
         existing = self._active.get(device_id)
@@ -244,6 +290,8 @@ class TaskEngine:
         if not screenshot_base64:
             return [{"action": "noop"}], 2000
 
+        screenshot_id = save_screenshot(screenshot_base64, prefix=f"task-{task.id}")
+
         try:
             result = self._ask_vision(task, screenshot_base64)
         except Exception as e:
@@ -269,6 +317,7 @@ class TaskEngine:
             thought=thought,
             commands=commands,
             status=status,
+            screenshot_id=screenshot_id,
         )
         task.steps.append(step)
 

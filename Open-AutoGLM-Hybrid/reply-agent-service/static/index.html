@@ -12,6 +12,8 @@
 .chat-bubble-left{background:#f3f4f6;border-radius:12px 12px 12px 2px}
 .chat-bubble-right{background:#3b82f6;color:#fff;border-radius:12px 12px 2px 12px}
 pre{white-space:pre-wrap;word-break:break-all}
+.screenshot-thumb{width:120px;height:auto;border-radius:8px;cursor:pointer;border:1px solid #e5e7eb;transition:transform .15s}
+.screenshot-thumb:hover{transform:scale(1.05);box-shadow:0 4px 12px rgba(0,0,0,.15)}
 </style>
 </head>
 <body class="bg-gray-50 text-gray-800 min-h-screen" x-data="app()" x-init="init()" x-cloak>
@@ -48,7 +50,7 @@ pre{white-space:pre-wrap;word-break:break-all}
   <!-- Tabs -->
   <div class="flex border-b mb-6 gap-1 overflow-x-auto">
     <template x-for="t in tabs" :key="t.id">
-      <button @click="tab=t.id" :class="tab===t.id?'tab-active':'text-gray-500 hover:text-gray-700'"
+      <button @click="tab=t.id;watchTab()" :class="tab===t.id?'tab-active':'text-gray-500 hover:text-gray-700'"
         class="px-4 py-2.5 text-sm whitespace-nowrap transition" x-text="t.label"></button>
     </template>
   </div>
@@ -78,12 +80,31 @@ pre{white-space:pre-wrap;word-break:break-all}
       <template x-if="Object.keys(status.devices||{}).length===0">
         <p class="text-gray-400 text-sm">暂无设备连接</p>
       </template>
-      <div class="space-y-2">
+      <div class="space-y-3">
         <template x-for="(info,did) in (status.devices||{})" :key="did">
-          <div class="flex items-center justify-between bg-gray-50 rounded px-4 py-2">
-            <span class="font-mono text-sm" x-text="did"></span>
-            <span class="text-xs" :class="info.last_seen_ago_s<30?'text-green-600':'text-yellow-600'"
-              x-text="info.last_seen_ago_s<30?'在线':'离线 ('+Math.round(info.last_seen_ago_s)+'s ago)'"></span>
+          <div class="flex items-start gap-4 bg-gray-50 rounded-lg p-3">
+            <template x-if="info.screenshot_id">
+              <img :src="screenshotUrl(info.screenshot_id)" class="screenshot-thumb"
+                @click="viewingScreenshot=screenshotUrl(info.screenshot_id)" alt="Device screen">
+            </template>
+            <template x-if="!info.screenshot_id">
+              <div class="w-[120px] h-[200px] bg-gray-200 rounded-lg flex items-center justify-center text-xs text-gray-400">无截图</div>
+            </template>
+            <div class="flex-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="font-mono text-sm font-medium" x-text="did"></span>
+                <span class="text-xs px-2 py-0.5 rounded-full" :class="info.last_seen_ago_s<30?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'"
+                  x-text="info.last_seen_ago_s<30?'在线':'离线 ('+Math.round(info.last_seen_ago_s)+'s)'"></span>
+              </div>
+              <div class="text-xs text-gray-500">指令队列: <span x-text="info.queue_depth"></span></div>
+              <template x-if="(status.active_tasks||{})[did]">
+                <div class="mt-1 text-xs">
+                  <span class="text-blue-600 font-medium">任务执行中:</span>
+                  <span x-text="(status.active_tasks[did]||{}).goal"></span>
+                  <span class="text-gray-400 ml-1">步骤 <span x-text="(status.active_tasks[did]||{}).step"></span></span>
+                </div>
+              </template>
+            </div>
           </div>
         </template>
       </div>
@@ -291,20 +312,28 @@ pre{white-space:pre-wrap;word-break:break-all}
       </div>
 
       <!-- Step Log -->
-      <div class="space-y-2 max-h-80 overflow-y-auto" x-ref="taskLog">
+      <div class="space-y-2 max-h-[500px] overflow-y-auto" x-ref="taskLog">
         <template x-for="s in activeTask.steps" :key="s.step">
-          <div class="bg-gray-50 rounded p-3 text-xs">
-            <div class="flex justify-between mb-1">
-              <span class="font-semibold">步骤 <span x-text="s.step"></span></span>
-              <span class="text-gray-400" x-text="new Date(s.timestamp*1000).toLocaleTimeString()"></span>
-            </div>
-            <div class="text-gray-600 mb-1"><span class="font-medium">观察:</span> <span x-text="s.observation"></span></div>
-            <div class="text-gray-700 mb-1"><span class="font-medium">思考:</span> <span x-text="s.thought"></span></div>
-            <div class="font-mono text-gray-500">
-              <span class="font-medium">操作:</span>
-              <template x-for="c in s.commands" :key="JSON.stringify(c)">
-                <span class="inline-block bg-white border rounded px-1.5 py-0.5 mr-1 mt-0.5" x-text="c.action+(c.text?' '+c.text.substring(0,20):'')+(c.x?(' ('+c.x+','+c.y+')'):'')"></span>
+          <div class="bg-gray-50 rounded-lg p-3 text-xs">
+            <div class="flex gap-3">
+              <template x-if="s.screenshot_id">
+                <img :src="screenshotUrl(s.screenshot_id)" class="screenshot-thumb shrink-0"
+                  @click="viewingScreenshot=screenshotUrl(s.screenshot_id)" alt="Step screenshot">
               </template>
+              <div class="flex-1 min-w-0">
+                <div class="flex justify-between mb-1">
+                  <span class="font-semibold">步骤 <span x-text="s.step"></span></span>
+                  <span class="text-gray-400" x-text="new Date(s.timestamp*1000).toLocaleTimeString()"></span>
+                </div>
+                <div class="text-gray-600 mb-1"><span class="font-medium">观察:</span> <span x-text="s.observation"></span></div>
+                <div class="text-gray-700 mb-1"><span class="font-medium">思考:</span> <span x-text="s.thought"></span></div>
+                <div class="font-mono text-gray-500">
+                  <span class="font-medium">操作:</span>
+                  <template x-for="c in s.commands" :key="JSON.stringify(c)">
+                    <span class="inline-block bg-white border rounded px-1.5 py-0.5 mr-1 mt-0.5" x-text="c.action+(c.text?' '+c.text.substring(0,20):'')+(c.x?(' ('+c.x+','+c.y+')'):'')"></span>
+                  </template>
+                </div>
+              </div>
             </div>
           </div>
         </template>
@@ -375,6 +404,16 @@ pre{white-space:pre-wrap;word-break:break-all}
     </div>
   </div>
 
+  <!-- Screenshot Viewer Modal -->
+  <template x-if="viewingScreenshot">
+  <div class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" @click.self="viewingScreenshot=null">
+    <div class="relative max-w-lg w-full">
+      <button @click="viewingScreenshot=null" class="absolute -top-3 -right-3 bg-white rounded-full w-8 h-8 flex items-center justify-center shadow text-gray-600 hover:text-gray-900 text-lg z-10">&times;</button>
+      <img :src="viewingScreenshot" class="w-full rounded-xl shadow-2xl" alt="Screenshot">
+    </div>
+  </div>
+  </template>
+
   <!-- Toast -->
   <div x-show="toast" x-transition class="fixed bottom-6 right-6 bg-gray-800 text-white px-5 py-3 rounded-lg shadow-lg text-sm z-50"
     x-text="toast"></div>
@@ -408,6 +447,8 @@ function app() {
     chatMessages: [],
     chatInput: '',
     chatLoading: false,
+    viewingScreenshot: null,
+    deviceScreenTimer: null,
     taskGoal: '',
     activeTask: null,
     taskList: [],
@@ -475,6 +516,13 @@ function app() {
     async loadStatus() {
       const d = await this.apiJson('/api/admin/status');
       if (d) this.status = d;
+    },
+
+    watchTab() {
+      if (this.deviceScreenTimer) { clearInterval(this.deviceScreenTimer); this.deviceScreenTimer = null; }
+      if (this.tab === 'dashboard') {
+        this.deviceScreenTimer = setInterval(() => this.loadStatus(), 5000);
+      }
     },
 
     async loadKnowledge() {
@@ -625,6 +673,15 @@ function app() {
         await this.loadSettings();
         this.showToast('设置已保存');
       }
+    },
+
+    screenshotUrl(sid) {
+      if (!sid) return '';
+      return '/api/screenshot/'+sid+'?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
+    },
+
+    deviceScreenUrl(did) {
+      return '/api/device/'+did+'/screenshot?api_key='+encodeURIComponent(this.apiKey)+'&t='+Date.now();
     },
 
     formatUptime(s) {
