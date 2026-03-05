@@ -125,3 +125,79 @@ def build_reply_commands(
         {"action": "tap", "x": sb_x, "y": sb_y},
         {"action": "wait", "ms": 500},
     ]
+
+
+def build_shortcut_commands(
+    shortcut: str,
+    params: dict | None = None,
+    screen_width: int = 1080,
+    screen_height: int = 2340,
+) -> list[dict]:
+    """Expand a shortcut name into a concrete command sequence.
+
+    Supported shortcuts:
+        open_app      — params: app_name or package_name
+        send_message  — params: text, (optional) input_box_y, send_button_x, send_button_y
+        go_back       — no params
+        go_home       — no params
+        scroll_down   — no params
+        scroll_up     — no params
+        tap           — params: x, y
+        swipe         — params: x1, y1, x2, y2, (optional) duration
+        input         — params: text
+        wait          — params: ms
+
+    Returns a list of command dicts ready for the phone to execute.
+    Raises ValueError for unknown shortcuts.
+    """
+    params = params or {}
+
+    if shortcut == "open_app":
+        pkg = params.get("package_name", "")
+        name = params.get("app_name", "")
+        cmd: dict = {"action": "launch_app"}
+        if pkg:
+            cmd["package_name"] = pkg
+        elif name:
+            cmd["app_name"] = name
+        else:
+            raise ValueError("open_app requires 'app_name' or 'package_name'")
+        return [cmd, {"action": "wait", "ms": 2000}]
+
+    if shortcut == "send_message":
+        text = params.get("text", "")
+        if not text:
+            raise ValueError("send_message requires 'text'")
+        return build_reply_commands(
+            reply_text=text,
+            input_box_y=params.get("input_box_y", 0),
+            send_button_x=params.get("send_button_x", 0),
+            send_button_y=params.get("send_button_y", 0),
+            screen_width=screen_width,
+            screen_height=screen_height,
+        )
+
+    if shortcut == "go_back":
+        return [{"action": "back"}]
+
+    if shortcut == "go_home":
+        return [{"action": "home"}]
+
+    if shortcut == "scroll_down":
+        mid_x = screen_width // 2
+        return [{"action": "swipe",
+                 "x1": mid_x, "y1": int(screen_height * 0.7),
+                 "x2": mid_x, "y2": int(screen_height * 0.3),
+                 "duration": 300}]
+
+    if shortcut == "scroll_up":
+        mid_x = screen_width // 2
+        return [{"action": "swipe",
+                 "x1": mid_x, "y1": int(screen_height * 0.3),
+                 "x2": mid_x, "y2": int(screen_height * 0.7),
+                 "duration": 300}]
+
+    if shortcut in ("tap", "swipe", "input", "back", "home", "wait", "launch_app"):
+        return [{"action": shortcut, **params}]
+
+    raise ValueError(f"Unknown shortcut: {shortcut}")

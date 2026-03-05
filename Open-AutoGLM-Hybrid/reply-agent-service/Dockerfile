@@ -11,6 +11,6 @@ RUN uv pip install --system --no-cache \
 
 COPY . .
 
-EXPOSE 7777
+EXPOSE 8080
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7777"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

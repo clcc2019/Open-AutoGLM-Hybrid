@@ -128,9 +128,13 @@ async def health():
 # ---------------------------------------------------------------------------
 # 6. Phone Poll API — the phone APP calls this to get commands
 # ---------------------------------------------------------------------------
-from phone_controller import analyze_screenshot, build_reply_commands
+from phone_controller import analyze_screenshot, build_reply_commands, build_shortcut_commands
 
 _last_buyer_message: dict[str, str] = {}
+
+# Per-device manual command queue. Commands enqueued via /api/phone/command
+# are drained by the next /api/phone/poll from the matching device.
+_command_queue: dict[str, list[list[dict]]] = {}
 
 
 class PhonePollRequest(BaseModel):
@@ -151,10 +155,20 @@ class PhonePollResponse(BaseModel):
 async def phone_poll(req: PhonePollRequest):
     """Phone APP polls this endpoint.
 
-    The server analyzes the screenshot, detects new buyer messages,
-    generates a reply via the Agent, and returns action commands
-    for the phone to execute.
+    Priority:
+      1. Manual commands from the queue (enqueued via /api/phone/command)
+      2. Auto-reply based on screenshot analysis
     """
+    # --- Priority 1: drain manual command queue ---
+    queued = _command_queue.get(req.device_id)
+    if queued:
+        commands = queued.pop(0)
+        if not queued:
+            del _command_queue[req.device_id]
+        logger.info("Dispatching %d queued commands to [%s]", len(commands), req.device_id)
+        return PhonePollResponse(commands=commands, next_poll_ms=1000)
+
+    # --- Priority 2: auto-reply via screenshot analysis ---
     if not req.screenshot:
         return PhonePollResponse(commands=[{"action": "noop"}], next_poll_ms=5000)
 
@@ -205,3 +219,61 @@ async def phone_poll(req: PhonePollRequest):
     )
 
     return PhonePollResponse(commands=commands, next_poll_ms=3000)
+
+
+# ---------------------------------------------------------------------------
+# 7. Manual Command API — enqueue commands for a device
+# ---------------------------------------------------------------------------
+
+class PhoneCommandRequest(BaseModel):
+    """Enqueue commands for a device to execute on next poll.
+
+    Two modes:
+      - Raw: provide `commands` list directly
+      - Shortcut: provide `shortcut` name + optional `params`
+    """
+    device_id: str = "phone-1"
+    commands: list[dict] | None = None
+    shortcut: str | None = None
+    params: dict | None = None
+
+
+@app.post("/api/phone/command")
+async def phone_command(req: PhoneCommandRequest):
+    """Enqueue manual commands for a device.
+
+    The commands will be picked up by the next /api/phone/poll from that device.
+    """
+    if req.commands:
+        cmds = req.commands
+    elif req.shortcut:
+        try:
+            cmds = build_shortcut_commands(req.shortcut, req.params)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        raise HTTPException(status_code=400, detail="Provide 'commands' or 'shortcut'")
+
+    _command_queue.setdefault(req.device_id, []).append(cmds)
+
+    logger.info("Enqueued %d commands for [%s] (queue depth: %d)",
+                len(cmds), req.device_id, len(_command_queue[req.device_id]))
+
+    return {
+        "queued": True,
+        "device_id": req.device_id,
+        "command_count": len(cmds),
+        "queue_depth": len(_command_queue[req.device_id]),
+        "commands": cmds,
+    }
+
+
+@app.get("/api/phone/commands/{device_id}")
+async def phone_commands(device_id: str):
+    """View the pending command queue for a device (debug endpoint)."""
+    queued = _command_queue.get(device_id, [])
+    return {
+        "device_id": device_id,
+        "queue_depth": len(queued),
+        "pending": queued,
+    }
