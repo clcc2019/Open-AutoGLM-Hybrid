@@ -29,6 +29,8 @@ class AutoGLMAccessibilityService : AccessibilityService() {
     }
 
     private var httpServer: HttpServer? = null
+    private var agentPoller: AgentPoller? = null
+    private var pollerStatus: String = "stopped"
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -36,12 +38,10 @@ class AutoGLMAccessibilityService : AccessibilityService() {
         
         Log.i(TAG, "Service connected")
         
-        // 启动 HTTP 服务器
         startHttpServer()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 不需要处理事件
     }
 
     override fun onInterrupt() {
@@ -52,11 +52,32 @@ class AutoGLMAccessibilityService : AccessibilityService() {
         super.onDestroy()
         instance = null
         
-        // 停止 HTTP 服务器
+        stopPoller()
         stopHttpServer()
         
         Log.i(TAG, "Service destroyed")
     }
+
+    fun startPoller(agentUrl: String, deviceId: String = "phone-1") {
+        stopPoller()
+        agentPoller = AgentPoller(this, agentUrl, deviceId).apply {
+            onStatusChange = { status ->
+                pollerStatus = status
+                Log.i(TAG, "Poller status: $status")
+            }
+            start()
+        }
+    }
+
+    fun stopPoller() {
+        agentPoller?.stop()
+        agentPoller = null
+        pollerStatus = "stopped"
+    }
+
+    fun isPollerRunning(): Boolean = agentPoller?.isRunning == true
+
+    fun getPollerStatus(): String = pollerStatus
 
     private fun startHttpServer() {
         try {

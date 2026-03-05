@@ -1,0 +1,37 @@
+[project]
+name = "reply-agent-service"
+version = "0.1.0"
+description = "Agno-based intelligent reply agent for Xianyu/e-commerce auto-reply with RAG, memory and skills"
+requires-python = ">=3.11"
+dependencies = [
+    "agno[os]",
+    "openai",
+    "httpx",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "python-dotenv",
+    "rich",
+    "lancedb",
+    "tantivy",
+]
+
+[project.optional-dependencies]
+pg = [
+    "psycopg2-binary",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]

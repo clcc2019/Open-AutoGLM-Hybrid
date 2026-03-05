@@ -1,0 +1,37 @@
+services:
+  reply-agent:
+    build: .
+    ports:
+      - "7777:7777"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+psycopg://ai:ai@postgres:5432/ai
+    volumes:
+      - ./knowledge_docs:/app/knowledge_docs:ro
+      - lancedb_data:/app/tmp/lancedb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ai
+      POSTGRES_PASSWORD: ai
+      POSTGRES_DB: ai
+    ports:
+      - "5532:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai -d ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  lancedb_data:

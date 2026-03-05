@@ -19,6 +19,7 @@
 - ✅ **高成功率** - 95-99% 成功率，稳定可靠
 - ✅ **一键部署** - 自动化部署脚本，30 分钟完成
 - ✅ **开源透明** - 所有代码开源，可审查
+- ✅ **智能自动回复** - 闲鱼/电商 App 自动客服，支持 RAG 知识库 + 长期记忆 + 议价策略
 
 ---
 
@@ -95,6 +96,23 @@ autoglm
 # 手机自动执行 ✅
 ```
 
+### 自动回复模式（闲鱼/电商）
+
+```bash
+# 1. 在服务器上启动 Reply Agent 服务
+cd reply-agent-service
+cp .env.example .env  # 编辑填入 API Key
+docker compose up -d
+
+# 2. 在手机 Termux 上启动自动回复
+cd termux-scripts
+python auto_reply.py --agent-url http://服务器IP:7777
+
+# 3. 打开闲鱼聊天界面，自动回复开始工作 ✅
+```
+
+详见 [Reply Agent Service 文档](reply-agent-service/README.md)。
+
 ---
 
 ## 📦 项目结构
@@ -112,7 +130,18 @@ Open-AutoGLM-Hybrid/
 │
 ├── termux-scripts/           # Termux 脚本
 │   ├── deploy.sh             # 一键部署脚本
-│   └── phone_controller.py   # 手机控制器（自动降级）
+│   ├── phone_controller.py   # 手机控制器（自动降级）
+│   ├── agent_api.py          # Agent API 客户端
+│   └── auto_reply.py         # 自动回复模式
+│
+├── reply-agent-service/      # Agno 智能回复 Agent 服务
+│   ├── app.py                # AgentOS 入口
+│   ├── agent.py              # Agent 定义（RAG + Memory + Tools）
+│   ├── config.py             # 配置管理
+│   ├── tools/                # 业务工具（意图分类、议价策略）
+│   ├── knowledge_docs/       # RAG 知识库文档
+│   ├── docker-compose.yml    # Docker 部署
+│   └── README.md             # 服务文档
 │
 ├── docs/                     # 文档
 │   ├── DEPLOYMENT_GUIDE.md   # 部署指南
