@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+psycopg://ai:ai@postgres:5432/ai
+      - DATABASE_URL=postgresql+psycopg2://ai:ai@postgres:5432/ai
     volumes:
       - ./knowledge_docs:/app/knowledge_docs:ro
       - lancedb_data:/app/tmp/lancedb

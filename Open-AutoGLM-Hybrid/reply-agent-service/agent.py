@@ -75,9 +75,9 @@ def create_reply_agent(db=None) -> Agent:
     )
 
     agent = Agent(
-        agent_id="reply-agent",
+        id="reply-agent",
         name="ReplyAgent",
-        role="闲鱼/电商平台智能客服",
+        description="闲鱼/电商平台智能客服",
         model=model,
         tools=[reply_toolkit],
         instructions=INSTRUCTIONS,
@@ -88,7 +88,6 @@ def create_reply_agent(db=None) -> Agent:
         add_history_to_context=True,
         num_history_runs=10,
         markdown=False,
-        show_tool_calls=False,
     )
 
     return agent

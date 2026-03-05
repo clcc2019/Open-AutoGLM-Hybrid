@@ -120,7 +120,7 @@ async def reload_knowledge():
 async def health():
     return {
         "status": "ok",
-        "agent": reply_agent.agent_id,
+        "agent": reply_agent.id,
         "model": settings.llm_model,
     }
 
