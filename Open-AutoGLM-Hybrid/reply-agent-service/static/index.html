@@ -242,6 +242,105 @@ pre{white-space:pre-wrap;word-break:break-all}
     </div>
   </div>
 
+  <!-- ==================== Task ==================== -->
+  <div x-show="tab==='task'" x-transition>
+    <h2 class="text-lg font-semibold mb-4">任务执行</h2>
+
+    <!-- Create Task -->
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-3">下发新任务</h3>
+      <p class="text-xs text-gray-500 mb-3">输入自然语言描述的任务目标，Vision LLM 会自动截图分析并逐步执行操作，直到完成。</p>
+      <div class="flex gap-2 mb-2">
+        <input x-model="taskGoal" placeholder="例如：打开闲鱼，搜索 iPhone 16，点击第一个商品"
+          class="flex-1 border rounded-lg px-3 py-2 text-sm" @keydown.enter="createTask()">
+        <button @click="createTask()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 whitespace-nowrap">
+          执行任务
+        </button>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button @click="taskGoal='打开闲鱼，点击消息页，查看最新聊天'" class="text-xs px-2.5 py-1 bg-gray-100 rounded-full hover:bg-gray-200">打开闲鱼消息</button>
+        <button @click="taskGoal='打开微信，搜索文件传输助手，发送一条消息：测试'" class="text-xs px-2.5 py-1 bg-gray-100 rounded-full hover:bg-gray-200">微信发消息</button>
+        <button @click="taskGoal='返回桌面，打开设置，查看关于手机'" class="text-xs px-2.5 py-1 bg-gray-100 rounded-full hover:bg-gray-200">查看手机信息</button>
+      </div>
+    </div>
+
+    <!-- Active Task -->
+    <template x-if="activeTask">
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4 border-l-4"
+      :class="activeTask.status==='running'?'border-blue-500':activeTask.status==='completed'?'border-green-500':activeTask.status==='failed'?'border-red-500':'border-gray-300'">
+      <div class="flex justify-between items-start mb-3">
+        <div>
+          <span class="text-xs font-mono bg-gray-100 rounded px-2 py-0.5 mr-2" x-text="activeTask.id"></span>
+          <span class="text-xs px-2 py-0.5 rounded-full"
+            :class="{'bg-blue-100 text-blue-700':activeTask.status==='running','bg-green-100 text-green-700':activeTask.status==='completed','bg-red-100 text-red-700':activeTask.status==='failed','bg-yellow-100 text-yellow-700':activeTask.status==='pending','bg-gray-100 text-gray-600':activeTask.status==='cancelled'}"
+            x-text="activeTask.status"></span>
+        </div>
+        <div class="flex gap-2">
+          <template x-if="activeTask.status==='running'||activeTask.status==='pending'">
+            <button @click="cancelTask(activeTask.id)" class="text-xs text-red-500 hover:underline">取消</button>
+          </template>
+          <button @click="refreshTask()" class="text-xs text-blue-500 hover:underline">刷新</button>
+        </div>
+      </div>
+      <div class="text-sm font-medium mb-2" x-text="activeTask.goal"></div>
+      <div class="text-xs text-gray-500 mb-3">
+        步骤: <span x-text="activeTask.current_step"></span>
+        <template x-if="activeTask.error">
+          <span class="text-red-500 ml-2" x-text="'错误: '+activeTask.error"></span>
+        </template>
+      </div>
+
+      <!-- Step Log -->
+      <div class="space-y-2 max-h-80 overflow-y-auto" x-ref="taskLog">
+        <template x-for="s in activeTask.steps" :key="s.step">
+          <div class="bg-gray-50 rounded p-3 text-xs">
+            <div class="flex justify-between mb-1">
+              <span class="font-semibold">步骤 <span x-text="s.step"></span></span>
+              <span class="text-gray-400" x-text="new Date(s.timestamp*1000).toLocaleTimeString()"></span>
+            </div>
+            <div class="text-gray-600 mb-1"><span class="font-medium">观察:</span> <span x-text="s.observation"></span></div>
+            <div class="text-gray-700 mb-1"><span class="font-medium">思考:</span> <span x-text="s.thought"></span></div>
+            <div class="font-mono text-gray-500">
+              <span class="font-medium">操作:</span>
+              <template x-for="c in s.commands" :key="JSON.stringify(c)">
+                <span class="inline-block bg-white border rounded px-1.5 py-0.5 mr-1 mt-0.5" x-text="c.action+(c.text?' '+c.text.substring(0,20):'')+(c.x?(' ('+c.x+','+c.y+')'):'')"></span>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+    </template>
+
+    <!-- Task History -->
+    <div class="bg-white rounded-lg p-5 shadow-sm">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="font-semibold">历史任务</h3>
+        <button @click="loadTasks()" class="text-xs text-blue-500 hover:underline">刷新</button>
+      </div>
+      <template x-if="taskList.length===0">
+        <p class="text-gray-400 text-sm">暂无任务记录</p>
+      </template>
+      <div class="space-y-2">
+        <template x-for="t in taskList" :key="t.id">
+          <div class="flex items-center justify-between bg-gray-50 rounded px-4 py-2 cursor-pointer hover:bg-gray-100"
+            @click="viewTask(t.id)">
+            <div class="flex-1 min-w-0">
+              <span class="text-xs font-mono text-gray-400 mr-2" x-text="t.id"></span>
+              <span class="text-sm truncate" x-text="t.goal"></span>
+            </div>
+            <div class="flex items-center gap-2 ml-3 shrink-0">
+              <span class="text-xs" x-text="t.current_step+' steps'"></span>
+              <span class="text-xs px-2 py-0.5 rounded-full"
+                :class="{'bg-blue-100 text-blue-700':t.status==='running','bg-green-100 text-green-700':t.status==='completed','bg-red-100 text-red-700':t.status==='failed','bg-yellow-100 text-yellow-700':t.status==='pending','bg-gray-100 text-gray-600':t.status==='cancelled'}"
+                x-text="t.status"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
   <!-- ==================== Settings ==================== -->
   <div x-show="tab==='settings'" x-transition>
     <h2 class="text-lg font-semibold mb-4">系统配置</h2>
@@ -294,6 +393,7 @@ function app() {
       {id:'dashboard',label:'仪表盘'},
       {id:'knowledge',label:'知识库'},
       {id:'command',label:'指令控制'},
+      {id:'task',label:'任务'},
       {id:'chat',label:'对话测试'},
       {id:'settings',label:'设置'},
     ],
@@ -308,6 +408,10 @@ function app() {
     chatMessages: [],
     chatInput: '',
     chatLoading: false,
+    taskGoal: '',
+    activeTask: null,
+    taskList: [],
+    taskPollTimer: null,
     cfgData: {},
     cfgEdit: {min_price_ratio:0.8, auto_escalate_keywords:''},
 
@@ -365,6 +469,7 @@ function app() {
       this.loadStatus();
       this.loadKnowledge();
       this.loadSettings();
+      this.loadTasks();
     },
 
     async loadStatus() {
@@ -457,6 +562,61 @@ function app() {
       }
       this.chatLoading = false;
       this.$nextTick(()=>{document.getElementById('chatBox').scrollTop=99999});
+    },
+
+    async createTask() {
+      if (!this.taskGoal.trim()) return;
+      const d = await this.apiJson('/api/task', {method:'POST', body:{device_id:this.cmdDevice, goal:this.taskGoal}});
+      if (d) {
+        this.activeTask = d;
+        this.taskGoal = '';
+        this.showToast('任务已创建: ' + d.id);
+        this.startTaskPoll(d.id);
+        this.loadTasks();
+      }
+    },
+
+    async loadTasks() {
+      const d = await this.apiJson('/api/tasks?limit=20');
+      if (d) this.taskList = d.tasks || [];
+    },
+
+    async viewTask(taskId) {
+      const d = await this.apiJson('/api/task/'+taskId);
+      if (d) {
+        this.activeTask = d;
+        if (d.status==='running'||d.status==='pending') this.startTaskPoll(taskId);
+        else this.stopTaskPoll();
+      }
+    },
+
+    async refreshTask() {
+      if (!this.activeTask) return;
+      const d = await this.apiJson('/api/task/'+this.activeTask.id);
+      if (d) {
+        this.activeTask = d;
+        if (d.status!=='running'&&d.status!=='pending') {
+          this.stopTaskPoll();
+          this.loadTasks();
+        }
+        this.$nextTick(()=>{if(this.$refs.taskLog)this.$refs.taskLog.scrollTop=99999});
+      }
+    },
+
+    async cancelTask(taskId) {
+      await this.apiJson('/api/task/'+taskId+'/cancel', {method:'POST'});
+      this.refreshTask();
+      this.loadTasks();
+      this.showToast('任务已取消');
+    },
+
+    startTaskPoll(taskId) {
+      this.stopTaskPoll();
+      this.taskPollTimer = setInterval(()=>this.refreshTask(), 2000);
+    },
+
+    stopTaskPoll() {
+      if (this.taskPollTimer) { clearInterval(this.taskPollTimer); this.taskPollTimer = null; }
     },
 
     async saveSettings() {

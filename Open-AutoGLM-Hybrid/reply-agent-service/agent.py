@@ -47,10 +47,15 @@ INSTRUCTIONS = [
 def create_reply_agent(db=None) -> Agent:
     """Create the reply agent with knowledge, memory, and tools."""
 
+    extra_body = {}
+    if "k2.5" in settings.llm_model.lower() or "k2" in settings.llm_model.lower():
+        extra_body["thinking"] = {"type": "disabled"}
+
     model = OpenAILike(
         id=settings.llm_model,
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
+        extra_body=extra_body or None,
     )
 
     embedder = OpenAIEmbedder(

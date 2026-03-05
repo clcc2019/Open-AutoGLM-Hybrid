@@ -27,6 +27,7 @@ from phone_controller import (
     build_reply_commands,
     build_shortcut_commands,
 )
+from task_engine import task_engine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -195,8 +196,16 @@ class PhonePollResponse(BaseModel):
 
 @app.post("/api/phone/poll", response_model=PhonePollResponse)
 async def phone_poll(req: PhonePollRequest):
+    """Phone APP polls this endpoint.
+
+    Priority:
+      1. Manual commands from the queue
+      2. Active task (Vision LLM multi-step execution)
+      3. Auto-reply based on screenshot analysis
+    """
     _device_last_seen[req.device_id] = time.time()
 
+    # --- Priority 1: drain manual command queue ---
     queued = _command_queue.get(req.device_id)
     if queued:
         commands = queued.pop(0)
@@ -205,6 +214,13 @@ async def phone_poll(req: PhonePollRequest):
         logger.info("Dispatching %d queued commands to [%s]", len(commands), req.device_id)
         return PhonePollResponse(commands=commands, next_poll_ms=1000)
 
+    # --- Priority 2: active task ---
+    active_task = task_engine.get_active_task(req.device_id)
+    if active_task:
+        commands, poll_ms = task_engine.process_poll(req.device_id, req.screenshot)
+        return PhonePollResponse(commands=commands, next_poll_ms=poll_ms)
+
+    # --- Priority 3: auto-reply via screenshot analysis ---
     if not req.screenshot:
         return PhonePollResponse(commands=[{"action": "noop"}], next_poll_ms=5000)
 
@@ -316,6 +332,12 @@ async def admin_status():
         did: {"last_seen_ago_s": round(now - ts, 1), "queue_depth": len(_command_queue.get(did, []))}
         for did, ts in _device_last_seen.items()
     }
+    active_tasks = {}
+    for did in _device_last_seen:
+        t = task_engine.get_active_task(did)
+        if t:
+            active_tasks[did] = {"task_id": t.id, "goal": t.goal[:60], "step": t.current_step, "status": t.status.value}
+
     return {
         "uptime_s": round(now - _start_time, 1),
         "llm_provider": settings.llm_provider,
@@ -326,6 +348,7 @@ async def admin_status():
         "auth_enabled": bool(settings.api_key),
         "knowledge_docs": len(docs),
         "devices": devices,
+        "active_tasks": active_tasks,
         "recent_conversations": len(_last_buyer_message),
     }
 
@@ -443,3 +466,46 @@ async def admin_settings_update(req: SettingsUpdateRequest):
     if not updated:
         raise HTTPException(status_code=400, detail="No settings to update")
     return {"updated": updated}
+
+
+# ===========================================================================
+# Task API — Vision LLM multi-step task execution
+# ===========================================================================
+
+class TaskCreateRequest(BaseModel):
+    device_id: str = "phone-1"
+    goal: str
+
+
+@app.post("/api/task")
+async def task_create(req: TaskCreateRequest):
+    """Create a new task for a device.
+
+    The task will be picked up on the next phone poll and driven by the
+    Vision LLM until completion, failure, or cancellation.
+    """
+    if not req.goal.strip():
+        raise HTTPException(status_code=400, detail="Goal is required")
+    task = task_engine.create_task(req.device_id, req.goal.strip())
+    return task.to_dict()
+
+
+@app.get("/api/task/{task_id}")
+async def task_get(task_id: str):
+    task = task_engine.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task.to_dict()
+
+
+@app.post("/api/task/{task_id}/cancel")
+async def task_cancel(task_id: str):
+    ok = task_engine.cancel_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Task not found or already finished")
+    return {"cancelled": True, "task_id": task_id}
+
+
+@app.get("/api/tasks")
+async def task_list(device_id: str | None = None, limit: int = 20):
+    return {"tasks": task_engine.list_tasks(device_id=device_id, limit=limit)}
