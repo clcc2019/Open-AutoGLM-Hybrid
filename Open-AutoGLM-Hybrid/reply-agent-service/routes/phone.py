@@ -98,6 +98,8 @@ async def phone_poll(req: PhonePollRequest):
     active_task = task_engine.get_active_task(req.device_id)
     if active_task:
         commands, poll_ms = task_engine.process_poll(req.device_id, req.screenshot)
+        logger.info("Task poll [%s] → %d cmds, screenshot=%d bytes",
+                     req.device_id, len(commands), len(req.screenshot))
         return PhonePollResponse(commands=commands, next_poll_ms=poll_ms)
 
     if not req.screenshot:
