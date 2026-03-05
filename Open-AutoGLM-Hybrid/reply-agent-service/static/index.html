@@ -146,9 +146,11 @@ pre{white-space:pre-wrap;word-break:break-all}
         </div>
       </div>
       <div class="flex gap-4 mt-3 text-xs text-gray-500">
-        <span>📚 RAG 知识库: <span class="font-medium" x-text="(status.capabilities?.knowledge_docs||[]).length+' 文档'"></span></span>
+        <span>📚 RAG 知识库: <span class="font-medium" :class="status.capabilities?.rag_enabled?'text-green-600':'text-gray-400'"
+          x-text="status.capabilities?.rag_enabled?((status.capabilities?.knowledge_docs||[]).length+' 文档'):'已关闭'"></span></span>
         <span>💾 长期记忆: <span class="font-medium text-green-600" x-text="status.capabilities?.memory_enabled?'已启用':'未启用'"></span></span>
-        <span>🔍 知识搜索: <span class="font-medium text-green-600" x-text="status.capabilities?.search_knowledge?'已启用':'未启用'"></span></span>
+        <span>🔍 知识搜索: <span class="font-medium" :class="status.capabilities?.search_knowledge?'text-green-600':'text-gray-400'"
+          x-text="status.capabilities?.search_knowledge?'已启用':'已关闭'"></span></span>
       </div>
     </div>
 
@@ -409,7 +411,7 @@ pre{white-space:pre-wrap;word-break:break-all}
     <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
       <h3 class="font-semibold mb-4">LLM 配置 (只读)</h3>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <template x-for="key in ['llm_provider','llm_model','llm_api_key','llm_base_url','embedding_model','embedding_base_url','vision_model','vision_base_url','database_url']" :key="key">
+        <template x-for="key in ['llm_provider','llm_model','llm_api_key','llm_base_url','enable_rag','embedding_model','embedding_base_url','vision_model','vision_base_url','database_url']" :key="key">
           <div>
             <label class="block text-xs text-gray-500 mb-1" x-text="key"></label>
             <div class="bg-gray-50 rounded px-3 py-2 text-sm font-mono truncate" x-text="cfgData[key]||'-'"></div>

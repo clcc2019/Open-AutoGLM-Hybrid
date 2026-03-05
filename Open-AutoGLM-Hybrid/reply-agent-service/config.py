@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     embedding_base_url: str = Field(default="https://api.openai.com/v1", description="Embedding API base URL")
     embedding_dimensions: int = Field(default=1536, description="Embedding vector dimensions")
 
+    # --- RAG ---
+    enable_rag: bool = Field(default=False, description="Enable RAG knowledge base (requires embedding config)")
+
     # --- Database ---
     database_url: str = Field(default="sqlite:///reply_agent.db", description="postgresql://... or sqlite:///...")
 
@@ -42,16 +45,14 @@ class Settings(BaseSettings):
 
     # --- Security ---
     api_key: str = Field(default="", description="API key for authentication (empty = no auth)")
-    api_path_prefix: str = Field(default="/api", description="Custom API path prefix to obscure endpoints (e.g. /x3k9)")
+    api_path_prefix: str = Field(default="/api", description="Custom API path prefix to obscure endpoints")
     rate_limit_rpm: int = Field(default=120, description="Max requests per minute per IP (0 = disabled)")
-    admin_path: str = Field(default="/admin", description="Custom admin page path (e.g. /mgmt-x7)")
+    admin_path: str = Field(default="/admin", description="Custom admin page path")
 
     # --- Skills ---
     skills_dir: str = Field(default="skills", description="Path to skills directory")
 
     # --- MCP Servers ---
-    # JSON list: [{"name":"xxx","url":"http://...","transport":"sse"}] or
-    # [{"name":"xxx","command":"npx","args":["-y","@xxx/server"],"transport":"stdio"}]
     mcp_servers: str = Field(default="[]", description="JSON array of MCP server configs")
 
     # --- Business ---

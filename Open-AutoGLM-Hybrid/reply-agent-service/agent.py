@@ -1,4 +1,4 @@
-"""Reply Agent definition with Skills, MCP tools, RAG knowledge, memory, and business tools."""
+"""Reply Agent — creation, knowledge loading, and capability introspection."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import logging
 from pathlib import Path
 
 from agno.agent import Agent
-from agno.knowledge.knowledge import Knowledge
 from agno.models.openai.like import OpenAILike
-from agno.vectordb.lancedb import LanceDb, SearchType
-from agno.knowledge.embedder.openai import OpenAIEmbedder
 
 from config import settings
 from tools.reply_toolkit import ReplyToolkit
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
 INSTRUCTIONS = [
     "你是一个专业的闲鱼/电商平台卖家客服助手。",
     "你的目标是代替卖家与买家沟通，促成交易、处理售后。",
@@ -44,6 +44,37 @@ INSTRUCTIONS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Builder helpers
+# ---------------------------------------------------------------------------
+def _build_knowledge():
+    """Build RAG knowledge base. Returns (knowledge, embedder) or (None, None)."""
+    if not settings.enable_rag:
+        logger.info("RAG disabled by config")
+        return None
+
+    from agno.knowledge.knowledge import Knowledge
+    from agno.vectordb.lancedb import LanceDb, SearchType
+    from agno.knowledge.embedder.openai import OpenAIEmbedder
+
+    embedder = OpenAIEmbedder(
+        id=settings.embedding_model,
+        api_key=settings.effective_embedding_api_key,
+        base_url=settings.embedding_base_url,
+        dimensions=settings.embedding_dimensions,
+    )
+    knowledge = Knowledge(
+        vector_db=LanceDb(
+            uri=settings.lancedb_uri,
+            table_name="reply_knowledge",
+            search_type=SearchType.hybrid,
+            embedder=embedder,
+        ),
+    )
+    logger.info("RAG knowledge base initialized (LanceDB: %s)", settings.lancedb_uri)
+    return knowledge
+
+
 def _build_skills():
     """Load skills from the skills directory if available."""
     skills_dir = Path(settings.skills_dir)
@@ -64,7 +95,7 @@ def _build_skills():
 
 
 def _build_mcp_tools() -> list:
-    """Build MCP tool instances from config. Returns list of MCPTools objects."""
+    """Build MCP tool instances from config."""
     server_configs = settings.mcp_server_list
     if not server_configs:
         return []
@@ -88,22 +119,13 @@ def _build_mcp_tools() -> list:
                     logger.warning("MCP server '%s': stdio transport requires 'command'", name)
                     continue
                 full_command = " ".join([command] + args) if args else command
-                tool = MCPTools(
-                    command=full_command,
-                    env=env,
-                    transport="stdio",
-                    tool_name_prefix=name,
-                )
+                tool = MCPTools(command=full_command, env=env, transport="stdio", tool_name_prefix=name)
             else:
                 url = cfg.get("url", "")
                 if not url:
                     logger.warning("MCP server '%s': sse/http transport requires 'url'", name)
                     continue
-                tool = MCPTools(
-                    url=url,
-                    transport=transport,
-                    tool_name_prefix=name,
-                )
+                tool = MCPTools(url=url, transport=transport, tool_name_prefix=name)
             mcp_tools.append(tool)
             logger.info("MCP server configured: %s (%s)", name, transport)
         except Exception as e:
@@ -112,8 +134,11 @@ def _build_mcp_tools() -> list:
     return mcp_tools
 
 
+# ---------------------------------------------------------------------------
+# Agent factory
+# ---------------------------------------------------------------------------
 def create_reply_agent(db=None) -> Agent:
-    """Create the reply agent with knowledge, memory, skills, MCP tools, and business tools."""
+    """Create the reply agent with all configured capabilities."""
 
     extra_body = {}
     if "k2.5" in settings.llm_model.lower() or "k2" in settings.llm_model.lower():
@@ -126,27 +151,12 @@ def create_reply_agent(db=None) -> Agent:
         extra_body=extra_body or None,
     )
 
-    embedder = OpenAIEmbedder(
-        id=settings.embedding_model,
-        api_key=settings.effective_embedding_api_key,
-        base_url=settings.embedding_base_url,
-        dimensions=settings.embedding_dimensions,
-    )
-
-    knowledge = Knowledge(
-        vector_db=LanceDb(
-            uri=settings.lancedb_uri,
-            table_name="reply_knowledge",
-            search_type=SearchType.hybrid,
-            embedder=embedder,
-        ),
-    )
+    knowledge = _build_knowledge()
 
     reply_toolkit = ReplyToolkit(
         min_price_ratio=settings.min_price_ratio,
         escalate_keywords=settings.escalate_keywords_list,
     )
-
     tools: list = [reply_toolkit]
 
     mcp_tools = _build_mcp_tools()
@@ -164,7 +174,7 @@ def create_reply_agent(db=None) -> Agent:
         skills=skills,
         instructions=INSTRUCTIONS,
         knowledge=knowledge,
-        search_knowledge=True,
+        search_knowledge=bool(knowledge),
         db=db,
         enable_agentic_memory=True,
         add_history_to_context=True,
@@ -175,12 +185,14 @@ def create_reply_agent(db=None) -> Agent:
     return agent
 
 
+# ---------------------------------------------------------------------------
+# Knowledge loader
+# ---------------------------------------------------------------------------
 def load_knowledge(agent: Agent) -> int:
-    """Load documents from knowledge_docs/ into the agent's knowledge base.
+    """Load documents from knowledge_docs/ into the agent's knowledge base."""
+    if not settings.enable_rag:
+        return 0
 
-    Returns:
-        Number of documents loaded.
-    """
     docs_dir = Path(settings.knowledge_docs_dir)
     if not docs_dir.exists():
         logger.warning("Knowledge docs directory not found: %s", docs_dir)
@@ -217,6 +229,9 @@ def load_knowledge(agent: Agent) -> int:
     return count
 
 
+# ---------------------------------------------------------------------------
+# Capabilities introspection
+# ---------------------------------------------------------------------------
 def get_agent_capabilities() -> dict:
     """Return a summary of current agent capabilities for the admin API."""
     skills_dir = Path(settings.skills_dir)
@@ -235,14 +250,18 @@ def get_agent_capabilities() -> dict:
             "command": cfg.get("command", ""),
         })
 
-    docs_dir = Path(settings.knowledge_docs_dir)
-    kb_docs = sorted(str(f.relative_to(docs_dir)) for f in docs_dir.rglob("*.md")) if docs_dir.exists() else []
+    kb_docs: list[str] = []
+    if settings.enable_rag:
+        docs_dir = Path(settings.knowledge_docs_dir)
+        if docs_dir.exists():
+            kb_docs = sorted(str(f.relative_to(docs_dir)) for f in docs_dir.rglob("*.md"))
 
     return {
+        "rag_enabled": settings.enable_rag,
         "skills": skill_names,
         "mcp_servers": mcp_servers,
         "knowledge_docs": kb_docs,
         "tools": ["classify_intent", "evaluate_bargain", "check_escalation", "format_reply"],
         "memory_enabled": True,
-        "search_knowledge": True,
+        "search_knowledge": settings.enable_rag,
     }
