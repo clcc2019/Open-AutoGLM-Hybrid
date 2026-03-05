@@ -1,28 +1,32 @@
 package com.autoglm.helper
 
-import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.Button
-import android.widget.EditText
+import android.view.View
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.textfield.TextInputEditText
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : Activity(), WebSocketClient.ConnectionListener {
+class MainActivity : AppCompatActivity(), WebSocketClient.ConnectionListener {
 
     private lateinit var statusText: TextView
     private lateinit var wsStatusText: TextView
-    private lateinit var serverUrlInput: EditText
-    private lateinit var connectButton: Button
+    private lateinit var accessibilityDot: View
+    private lateinit var serverDot: View
+    private lateinit var serverUrlInput: TextInputEditText
+    private lateinit var connectButton: MaterialButton
     private lateinit var logText: TextView
     private lateinit var logScrollView: ScrollView
 
@@ -47,6 +51,8 @@ class MainActivity : Activity(), WebSocketClient.ConnectionListener {
 
         statusText = findViewById(R.id.statusText)
         wsStatusText = findViewById(R.id.wsStatusText)
+        accessibilityDot = findViewById(R.id.accessibilityDot)
+        serverDot = findViewById(R.id.serverDot)
         serverUrlInput = findViewById(R.id.serverUrlInput)
         connectButton = findViewById(R.id.connectButton)
         logText = findViewById(R.id.logText)
@@ -59,36 +65,33 @@ class MainActivity : Activity(), WebSocketClient.ConnectionListener {
 
         serverUrlInput.setText(wsClient.serverUrl)
 
-        findViewById<Button>(R.id.saveUrlButton).setOnClickListener {
-            val url = serverUrlInput.text.toString().trim()
-            wsClient.serverUrl = url
-            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
-        }
-
-        findViewById<Button>(R.id.openSettingsButton).setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-
         connectButton.setOnClickListener {
             if (wsClient.isConnected()) {
                 wsClient.disconnect()
-                connectButton.text = "连接服务器"
-                wsStatusText.text = "远程服务器: 已断开"
             } else {
                 val url = serverUrlInput.text.toString().trim()
                 if (url.isNotEmpty()) {
                     wsClient.serverUrl = url
                 }
                 wsClient.connect()
-                connectButton.text = "断开连接"
+                updateServerStatus("connecting")
             }
         }
 
-        findViewById<Button>(R.id.testConnectionButton).setOnClickListener {
+        findViewById<MaterialButton>(R.id.openSettingsButton).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        findViewById<MaterialButton>(R.id.testConnectionButton).setOnClickListener {
             testLocalConnection()
         }
 
-        appendLog("应用启动")
+        findViewById<MaterialButton>(R.id.clearLogButton).setOnClickListener {
+            logBuffer.clear()
+            logText.text = ""
+        }
+
+        appendLog("AutoGLM 已启动")
         updateAccessibilityStatus()
     }
 
@@ -108,32 +111,57 @@ class MainActivity : Activity(), WebSocketClient.ConnectionListener {
     }
 
     private fun updateAccessibilityStatus() {
-        val service = AutoGLMAccessibilityService.getInstance()
-        statusText.text = if (service != null) {
-            getString(R.string.service_running)
-        } else {
-            getString(R.string.service_stopped)
+        val running = AutoGLMAccessibilityService.getInstance() != null
+        statusText.text = if (running) getString(R.string.service_running) else getString(R.string.service_stopped)
+        statusText.setTextColor(ContextCompat.getColor(this,
+            if (running) R.color.status_running else R.color.status_stopped))
+        accessibilityDot.backgroundTintList = ContextCompat.getColorStateList(this,
+            if (running) R.color.status_running else R.color.status_stopped)
+    }
+
+    private fun updateServerStatus(state: String) {
+        val colorRes: Int
+        val text: String
+        when (state) {
+            "connected" -> {
+                colorRes = R.color.status_running
+                text = getString(R.string.server_connected)
+                connectButton.text = "断开连接"
+            }
+            "connecting" -> {
+                colorRes = R.color.status_connecting
+                text = getString(R.string.server_connecting)
+                connectButton.text = "连接中…"
+            }
+            else -> {
+                colorRes = R.color.status_stopped
+                text = getString(R.string.server_disconnected)
+                connectButton.text = "连接服务器"
+            }
         }
+        wsStatusText.text = text
+        wsStatusText.setTextColor(ContextCompat.getColor(this, colorRes))
+        serverDot.backgroundTintList = ContextCompat.getColorStateList(this, colorRes)
     }
 
     // --- WebSocketClient.ConnectionListener ---
 
     override fun onConnected() {
-        wsStatusText.text = "远程服务器: 已连接"
-        connectButton.text = "断开连接"
+        runOnUiThread { updateServerStatus("connected") }
     }
 
     override fun onDisconnected(reason: String) {
-        wsStatusText.text = "远程服务器: 已断开"
-        connectButton.text = "连接服务器"
+        runOnUiThread { updateServerStatus("disconnected") }
     }
 
     override fun onError(error: String) {
-        Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+        runOnUiThread {
+            Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onLog(message: String) {
-        appendLog(message)
+        runOnUiThread { appendLog(message) }
     }
 
     // --- Helpers ---
@@ -164,7 +192,7 @@ class MainActivity : Activity(), WebSocketClient.ConnectionListener {
                 runOnUiThread {
                     if (code == 200) {
                         Toast.makeText(this, getString(R.string.connection_success), Toast.LENGTH_SHORT).show()
-                        appendLog("本地无障碍服务测试: 成功")
+                        appendLog("本地服务测试: 成功")
                     } else {
                         Toast.makeText(this, getString(R.string.connection_failed, "HTTP $code"), Toast.LENGTH_SHORT).show()
                     }
@@ -172,7 +200,7 @@ class MainActivity : Activity(), WebSocketClient.ConnectionListener {
             } catch (e: Exception) {
                 runOnUiThread {
                     Toast.makeText(this, getString(R.string.connection_failed, e.message), Toast.LENGTH_LONG).show()
-                    appendLog("本地无障碍服务测试: 失败 - ${e.message}")
+                    appendLog("本地服务测试: 失败 - ${e.message}")
                 }
             }
         }.start()

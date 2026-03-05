@@ -2,8 +2,11 @@
 <resources>
     <string name="app_name">AutoGLM</string>
     <string name="accessibility_service_description">AutoGLM 自动化助手\n\n此服务用于执行手机自动化操作，包括:\n• 模拟点击和滑动\n• 截取屏幕内容\n• 输入文字\n\n操作由远程服务器 AI 决策，手机端仅执行指令。</string>
-    <string name="service_running">无障碍服务: 运行中</string>
-    <string name="service_stopped">无障碍服务: 已停止</string>
+    <string name="service_running">运行中</string>
+    <string name="service_stopped">已停止</string>
     <string name="connection_success">本地服务连接成功！</string>
     <string name="connection_failed">连接失败: %s</string>
+    <string name="server_connected">已连接</string>
+    <string name="server_disconnected">未连接</string>
+    <string name="server_connecting">连接中…</string>
 </resources>
