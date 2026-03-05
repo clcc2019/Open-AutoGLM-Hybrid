@@ -95,7 +95,7 @@ class PhoneController:
 **无障碍服务模式**:
 ```
 Termux (Python)
-    ↓ HTTP Request (localhost:8080)
+    ↓ HTTP Request (localhost:6443)
 AutoGLM Helper (HTTP Server)
     ↓ AccessibilityService API
 Android System

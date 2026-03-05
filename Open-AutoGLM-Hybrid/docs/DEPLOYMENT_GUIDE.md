@@ -149,7 +149,7 @@
 
 1. 回到 AutoGLM Helper
 2. 状态应显示: "AutoGLM 服务运行中"
-3. 服务器状态应显示: "运行中 (端口 8080)"
+3. 服务器状态应显示: "运行中 (端口 6443)"
 
 ---
 
@@ -283,7 +283,7 @@ echo $PHONE_AGENT_API_KEY
 
 1. **在 Termux 中运行**
    ```bash
-   curl http://localhost:8080/status
+   curl http://localhost:6443/status
    ```
 
 2. **应该看到**
@@ -307,7 +307,7 @@ echo $PHONE_AGENT_API_KEY
 2. **应该看到**
    ```
    检测可用的控制模式...
-   ✅ 使用无障碍服务模式 (http://localhost:8080)
+   ✅ 使用无障碍服务模式 (http://localhost:6443)
    当前模式: accessibility
    测试截图...
    截图成功: (1080, 2400)

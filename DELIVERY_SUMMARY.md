@@ -158,7 +158,7 @@ wget -O phone_controller.py https://your-link/phone_controller.py
 
 1. 查看文档: `docs/TROUBLESHOOTING.md`
 2. 查看日志: `~/.autoglm/autoglm.log`
-3. 测试连接: `curl http://localhost:8080/status`
+3. 测试连接: `curl http://localhost:6443/status`
 
 ---
 

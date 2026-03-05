@@ -30,7 +30,7 @@ class PhoneController:
     MODE_LADB = "ladb"  # LADB 模式
     MODE_NONE = "none"  # 无可用模式
     
-    def __init__(self, helper_url: str = "http://localhost:8080",
+    def __init__(self, helper_url: str = "http://localhost:6443",
                  preferred_mode: str = "auto"):
         """
         初始化手机控制器

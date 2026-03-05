@@ -38,7 +38,7 @@ class MainActivity : Activity() {
         private const val PREFS_NAME = "autoglm_prefs"
         private const val KEY_AGENT_URL = "agent_url"
         private const val KEY_API_KEY = "api_key"
-        private const val DEFAULT_AGENT_URL = "http://192.168.1.100:8080"
+        private const val DEFAULT_AGENT_URL = "http://192.168.1.100:6443"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

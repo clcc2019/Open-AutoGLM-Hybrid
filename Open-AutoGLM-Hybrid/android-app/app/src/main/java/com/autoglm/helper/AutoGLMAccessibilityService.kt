@@ -20,7 +20,7 @@ class AutoGLMAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AutoGLM-Service"
-        const val PORT = 8080
+        const val PORT = 6443
         
         @Volatile
         private var instance: AutoGLMAccessibilityService? = null

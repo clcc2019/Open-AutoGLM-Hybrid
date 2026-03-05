@@ -48,14 +48,14 @@ docker compose up -d
 
 # 或本地开发
 pip install uv && uv pip install -e "."
-uvicorn app:app --host 0.0.0.0 --port 8080
+uvicorn app:app --host 0.0.0.0 --port 6443
 ```
 
 ### 2. 手机端
 
 1. 构建并安装 AutoGLM Helper APK（见 `android-app/BUILD_INSTRUCTIONS.md`）
 2. 打开 APP → 开启无障碍服务
-3. 输入服务器地址（如 `http://192.168.1.100:8080`）
+3. 输入服务器地址（如 `http://192.168.1.100:6443`）
 4. 点击「连接 Agent」
 5. 打开闲鱼聊天界面，自动回复开始工作
 
@@ -74,7 +74,7 @@ POST /api/phone/poll
 ### 快捷回复（供其他客户端调用）
 
 ```bash
-curl -X POST http://localhost:8080/api/quick-reply \
+curl -X POST http://localhost:6443/api/quick-reply \
   -H "Content-Type: application/json" \
   -d '{
     "buyer_message": "能便宜点吗？",

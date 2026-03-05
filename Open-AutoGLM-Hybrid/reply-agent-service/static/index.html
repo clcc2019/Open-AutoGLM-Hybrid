@@ -83,6 +83,75 @@ pre{white-space:pre-wrap;word-break:break-all}
         </template>
       </div>
     </div>
+    <!-- Agent Capabilities -->
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-3">Agent 能力</h3>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Skills -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-lg">🧠</span>
+            <span class="font-medium text-sm">Skills 技能</span>
+            <span class="text-xs px-1.5 py-0.5 rounded-full ml-auto"
+              :class="(status.capabilities?.skills||[]).length>0?'bg-green-100 text-green-700':'bg-gray-200 text-gray-500'"
+              x-text="(status.capabilities?.skills||[]).length>0?(status.capabilities.skills.length+' 个'):'未配置'"></span>
+          </div>
+          <template x-if="(status.capabilities?.skills||[]).length>0">
+            <div class="space-y-1">
+              <template x-for="s in status.capabilities.skills" :key="s">
+                <div class="text-xs font-mono bg-white rounded px-2 py-1" x-text="s"></div>
+              </template>
+            </div>
+          </template>
+          <template x-if="(status.capabilities?.skills||[]).length===0">
+            <p class="text-xs text-gray-400">在 skills/ 目录添加 SKILL.md</p>
+          </template>
+        </div>
+        <!-- MCP Servers -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-lg">🔌</span>
+            <span class="font-medium text-sm">MCP 服务</span>
+            <span class="text-xs px-1.5 py-0.5 rounded-full ml-auto"
+              :class="(status.capabilities?.mcp_servers||[]).length>0?'bg-green-100 text-green-700':'bg-gray-200 text-gray-500'"
+              x-text="(status.capabilities?.mcp_servers||[]).length>0?(status.capabilities.mcp_servers.length+' 个'):'未配置'"></span>
+          </div>
+          <template x-if="(status.capabilities?.mcp_servers||[]).length>0">
+            <div class="space-y-1">
+              <template x-for="m in status.capabilities.mcp_servers" :key="m.name">
+                <div class="text-xs bg-white rounded px-2 py-1">
+                  <span class="font-mono font-medium" x-text="m.name"></span>
+                  <span class="text-gray-400 ml-1" x-text="'('+m.transport+')'"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="(status.capabilities?.mcp_servers||[]).length===0">
+            <p class="text-xs text-gray-400">在 .env 中配置 MCP_SERVERS</p>
+          </template>
+        </div>
+        <!-- Tools -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-lg">🛠️</span>
+            <span class="font-medium text-sm">内置工具</span>
+            <span class="text-xs px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 ml-auto"
+              x-text="(status.capabilities?.tools||[]).length+' 个'"></span>
+          </div>
+          <div class="space-y-1">
+            <template x-for="t in (status.capabilities?.tools||[])" :key="t">
+              <div class="text-xs font-mono bg-white rounded px-2 py-1" x-text="t"></div>
+            </template>
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-4 mt-3 text-xs text-gray-500">
+        <span>📚 RAG 知识库: <span class="font-medium" x-text="(status.capabilities?.knowledge_docs||[]).length+' 文档'"></span></span>
+        <span>💾 长期记忆: <span class="font-medium text-green-600" x-text="status.capabilities?.memory_enabled?'已启用':'未启用'"></span></span>
+        <span>🔍 知识搜索: <span class="font-medium text-green-600" x-text="status.capabilities?.search_knowledge?'已启用':'未启用'"></span></span>
+      </div>
+    </div>
+
     <div class="bg-white rounded-lg p-5 shadow-sm">
       <h3 class="font-semibold mb-3">系统信息</h3>
       <div class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">

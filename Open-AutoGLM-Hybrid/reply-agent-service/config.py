@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # --- Agent ---
     agent_host: str = Field(default="0.0.0.0")
-    agent_port: int = Field(default=8080)
+    agent_port: int = Field(default=6443)
 
     # --- Vision LLM (for screenshot analysis) ---
     vision_model: str = Field(default="", description="Vision model ID (defaults to llm_model)")
@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     api_path_prefix: str = Field(default="/api", description="Custom API path prefix to obscure endpoints (e.g. /x3k9)")
     rate_limit_rpm: int = Field(default=120, description="Max requests per minute per IP (0 = disabled)")
     admin_path: str = Field(default="/admin", description="Custom admin page path (e.g. /mgmt-x7)")
+
+    # --- Skills ---
+    skills_dir: str = Field(default="skills", description="Path to skills directory")
+
+    # --- MCP Servers ---
+    # JSON list: [{"name":"xxx","url":"http://...","transport":"sse"}] or
+    # [{"name":"xxx","command":"npx","args":["-y","@xxx/server"],"transport":"stdio"}]
+    mcp_servers: str = Field(default="[]", description="JSON array of MCP server configs")
 
     # --- Business ---
     min_price_ratio: float = Field(default=0.8, description="Minimum acceptable price ratio for bargaining")
@@ -76,6 +84,15 @@ class Settings(BaseSettings):
     @property
     def effective_vision_base_url(self) -> str:
         return self.vision_base_url or self.llm_base_url
+
+    @property
+    def mcp_server_list(self) -> list[dict]:
+        import json
+        try:
+            servers = json.loads(self.mcp_servers)
+            return servers if isinstance(servers, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 settings = Settings()

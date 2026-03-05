@@ -5,7 +5,7 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
-class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8080) : NanoHTTPD(port) {
+class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 6443) : NanoHTTPD(port) {
     
     companion object {
         private const val TAG = "AutoGLM-HttpServer"

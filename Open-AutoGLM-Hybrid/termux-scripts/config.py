@@ -26,7 +26,7 @@ class AIConfig:
 
 @dataclass
 class HelperConfig:
-    url: str = "http://localhost:8080"
+    url: str = "http://localhost:6443"
     mode: str = "auto"  # "auto" | "accessibility" | "ladb"
 
 
@@ -87,7 +87,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         mode = 'auto'
 
     helper = HelperConfig(
-        url=_get(cp, 'helper', 'url', 'AUTOGLM_HELPER_URL', 'http://localhost:8080'),
+        url=_get(cp, 'helper', 'url', 'AUTOGLM_HELPER_URL', 'http://localhost:6443'),
         mode=mode,
     )
 

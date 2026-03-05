@@ -407,7 +407,7 @@ export PHONE_AGENT_API_KEY="$api_key"
 export PHONE_AGENT_MODEL="gpt-4-vision-preview"
 
 # AutoGLM Helper 配置
-export AUTOGLM_HELPER_URL="http://localhost:8080"
+export AUTOGLM_HELPER_URL="http://localhost:6443"
 EOF
     
     # 添加到 .bashrc
@@ -471,7 +471,7 @@ check_helper_app() {
     # 测试连接
     print_info "测试 AutoGLM Helper 连接..."
     
-    if curl -s http://localhost:8080/status > /dev/null 2>&1; then
+    if curl -s http://localhost:6443/status > /dev/null 2>&1; then
         print_success "AutoGLM Helper 连接成功！"
     else
         print_warning "无法连接到 AutoGLM Helper"
@@ -507,7 +507,7 @@ show_completion() {
     echo "故障排除:"
     echo "  - 检查 AutoGLM Helper 是否运行"
     echo "  - 检查无障碍权限是否开启"
-    echo "  - 测试连接: curl http://localhost:8080/status"
+    echo "  - 测试连接: curl http://localhost:6443/status"
     echo ""
     echo "============================================================"
     echo ""

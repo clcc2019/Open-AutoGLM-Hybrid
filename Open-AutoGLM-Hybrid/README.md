@@ -106,7 +106,7 @@ docker compose up -d
 
 # 2. 在手机 Termux 上启动自动回复
 cd termux-scripts
-python auto_reply.py --agent-url http://服务器IP:8080
+python auto_reply.py --agent-url http://服务器IP:6443
 
 # 3. 打开闲鱼聊天界面，自动回复开始工作 ✅
 ```

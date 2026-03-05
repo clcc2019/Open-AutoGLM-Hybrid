@@ -1,7 +1,7 @@
 """Reply Agent Service — AgentOS entrypoint.
 
 Start:
-    uvicorn app:app --host 0.0.0.0 --port 8080
+    uvicorn app:app --host 0.0.0.0 --port 6443
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from agent import create_reply_agent, load_knowledge
+from agent import create_reply_agent, load_knowledge, get_agent_capabilities
 from config import settings
 from phone_controller import (
     analyze_screenshot,
@@ -422,6 +422,8 @@ async def admin_status():
         if t:
             active_tasks[did] = {"task_id": t.id, "goal": t.goal[:60], "step": t.current_step, "status": t.status.value}
 
+    capabilities = get_agent_capabilities()
+
     return {
         "uptime_s": round(now - _start_time, 1),
         "llm_provider": settings.llm_provider,
@@ -434,6 +436,7 @@ async def admin_status():
         "devices": devices,
         "active_tasks": active_tasks,
         "recent_conversations": len(_last_buyer_message),
+        "capabilities": capabilities,
     }
 
 
@@ -588,6 +591,15 @@ async def task_cancel(task_id: str):
 @app.get(f"{_P}/tasks")
 async def task_list(device_id: str | None = None, limit: int = 20):
     return {"tasks": task_engine.list_tasks(device_id=device_id, limit=limit)}
+
+
+# ===========================================================================
+# Capabilities API
+# ===========================================================================
+
+@app.get(f"{_P}/capabilities")
+async def capabilities():
+    return get_agent_capabilities()
 
 
 # ===========================================================================

@@ -26,7 +26,7 @@ class AgentReply:
 class AgentAPIClient:
     """Client for the Agno Reply Agent Service."""
 
-    def __init__(self, base_url: str = "http://localhost:8080"):
+    def __init__(self, base_url: str = "http://localhost:6443"):
         self.base_url = base_url.rstrip("/")
         self._check_health()
 

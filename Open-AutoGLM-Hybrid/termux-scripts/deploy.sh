@@ -152,7 +152,7 @@ model = glm-4v-plus
 
 [helper]
 # AutoGLM Helper APP 的 HTTP 地址
-url = http://localhost:8080
+url = http://localhost:6443
 
 # 控制模式: auto / accessibility / ladb
 #   auto          - 自动检测（先尝试无障碍，不可用则降级到 LADB）
@@ -256,7 +256,7 @@ api_key = $api_key
 model = $model
 
 [helper]
-url = http://localhost:8080
+url = http://localhost:6443
 EOF
 
     print_success "智谱 AI 配置完成"
@@ -302,7 +302,7 @@ api_key = $api_key
 model = $model
 
 [helper]
-url = http://localhost:8080
+url = http://localhost:6443
 EOF
 
     print_success "OpenAI 兼容 API 配置完成"
@@ -356,7 +356,7 @@ check_helper_app() {
     # 测试连接
     print_info "测试 AutoGLM Helper 连接..."
     
-    if curl -s http://localhost:8080/status > /dev/null 2>&1; then
+    if curl -s http://localhost:6443/status > /dev/null 2>&1; then
         print_success "AutoGLM Helper 连接成功！"
     else
         print_warning "无法连接到 AutoGLM Helper"
@@ -402,7 +402,7 @@ show_completion() {
     echo "故障排除:"
     echo "  - 检查 AutoGLM Helper 是否运行"
     echo "  - 检查无障碍权限是否开启"
-    echo "  - 测试连接: curl http://localhost:8080/status"
+    echo "  - 测试连接: curl http://localhost:6443/status"
     echo ""
     echo "============================================================"
     echo ""
