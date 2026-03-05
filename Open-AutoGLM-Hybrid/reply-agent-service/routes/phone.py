@@ -46,6 +46,36 @@ def set_reply_agent(agent):
     _reply_agent = agent
 
 
+class QuickReplyRequest(BaseModel):
+    buyer_message: str
+    buyer_id: str = "anonymous"
+    session_id: str = ""
+    product_context: str = ""
+
+
+class QuickReplyResponse(BaseModel):
+    reply: str
+    session_id: str
+
+
+@router.post("/quick-reply", response_model=QuickReplyResponse)
+async def quick_reply(req: QuickReplyRequest):
+    session_id = req.session_id or f"xianyu-{req.buyer_id}"
+    message = req.buyer_message
+    if req.product_context:
+        message = f"[当前商品信息: {req.product_context}]\n\n买家消息: {message}"
+    else:
+        message = f"买家消息: {message}"
+
+    try:
+        response = _reply_agent.run(input=message, user_id=req.buyer_id, session_id=session_id)
+        reply_text = response.content if response else "亲，稍等一下哈～"
+        return QuickReplyResponse(reply=reply_text, session_id=session_id)
+    except Exception as e:
+        logger.error("Reply generation failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/phone/poll", response_model=PhonePollResponse)
 async def phone_poll(req: PhonePollRequest):
     """Phone APP polls this endpoint.

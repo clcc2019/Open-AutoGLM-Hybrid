@@ -73,6 +73,12 @@ async def admin_status():
     }
 
 
+@router.post("/knowledge/reload")
+async def reload_knowledge():
+    count = load_knowledge(_reply_agent)
+    return {"reloaded": True, "documents": count}
+
+
 @router.get("/admin/knowledge")
 async def admin_knowledge_list():
     if not KNOWLEDGE_DIR.exists():
