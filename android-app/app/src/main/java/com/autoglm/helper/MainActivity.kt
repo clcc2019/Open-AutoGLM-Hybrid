@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private lateinit var serverStatusText: TextView
     private lateinit var agentStatusText: TextView
     private lateinit var agentUrlInput: EditText
+    private lateinit var agentApiKeyInput: EditText
     private lateinit var openSettingsButton: Button
     private lateinit var testConnectionButton: Button
     private lateinit var startAgentButton: Button
@@ -36,7 +37,8 @@ class MainActivity : Activity() {
     companion object {
         private const val PREFS_NAME = "autoglm_prefs"
         private const val KEY_AGENT_URL = "agent_url"
-        private const val DEFAULT_AGENT_URL = "http://192.168.1.100:7777"
+        private const val KEY_API_KEY = "api_key"
+        private const val DEFAULT_AGENT_URL = "http://192.168.1.100:8080"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,6 +49,7 @@ class MainActivity : Activity() {
         serverStatusText = findViewById(R.id.serverStatusText)
         agentStatusText = findViewById(R.id.agentStatusText)
         agentUrlInput = findViewById(R.id.agentUrlInput)
+        agentApiKeyInput = findViewById(R.id.agentApiKeyInput)
         openSettingsButton = findViewById(R.id.openSettingsButton)
         testConnectionButton = findViewById(R.id.testConnectionButton)
         startAgentButton = findViewById(R.id.startAgentButton)
@@ -54,6 +57,7 @@ class MainActivity : Activity() {
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         agentUrlInput.setText(prefs.getString(KEY_AGENT_URL, DEFAULT_AGENT_URL))
+        agentApiKeyInput.setText(prefs.getString(KEY_API_KEY, ""))
 
         openSettingsButton.setOnClickListener { openAccessibilitySettings() }
         testConnectionButton.setOnClickListener { testLocalConnection() }
@@ -64,14 +68,18 @@ class MainActivity : Activity() {
                 Toast.makeText(this, "请输入 Agent 服务器地址", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            prefs.edit().putString(KEY_AGENT_URL, url).apply()
+            val apiKey = agentApiKeyInput.text.toString().trim()
+            prefs.edit()
+                .putString(KEY_AGENT_URL, url)
+                .putString(KEY_API_KEY, apiKey)
+                .apply()
 
             val service = AutoGLMAccessibilityService.getInstance()
             if (service == null) {
                 Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            service.startPoller(url)
+            service.startPoller(url, apiKey = apiKey)
             updateAgentButtons(true)
         }
 
@@ -124,6 +132,7 @@ class MainActivity : Activity() {
         startAgentButton.isEnabled = !pollerRunning
         stopAgentButton.isEnabled = pollerRunning
         agentUrlInput.isEnabled = !pollerRunning
+        agentApiKeyInput.isEnabled = !pollerRunning
     }
 
     private fun openAccessibilitySettings() {

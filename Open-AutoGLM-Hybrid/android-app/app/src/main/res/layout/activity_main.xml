@@ -79,8 +79,27 @@
         android:id="@+id/agentUrlInput"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="http://192.168.1.100:7777"
+        android:hint="http://192.168.1.100:8080"
         android:inputType="textUri"
+        android:textSize="15sp"
+        android:padding="12dp"
+        android:background="#F5F5F5"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/agent_api_key_hint"
+        android:textSize="13sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="8dp" />
+
+    <EditText
+        android:id="@+id/agentApiKeyInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/agent_api_key_placeholder"
+        android:inputType="textPassword"
         android:textSize="15sp"
         android:padding="12dp"
         android:background="#F5F5F5"

@@ -33,12 +33,15 @@ class Settings(BaseSettings):
 
     # --- Agent ---
     agent_host: str = Field(default="0.0.0.0")
-    agent_port: int = Field(default=7777)
+    agent_port: int = Field(default=8080)
 
     # --- Vision LLM (for screenshot analysis) ---
     vision_model: str = Field(default="", description="Vision model ID (defaults to llm_model)")
     vision_api_key: str = Field(default="", description="Vision model API key (defaults to llm_api_key)")
     vision_base_url: str = Field(default="", description="Vision model base URL (defaults to llm_base_url)")
+
+    # --- Security ---
+    api_key: str = Field(default="", description="API key for authentication (empty = no auth)")
 
     # --- Business ---
     min_price_ratio: float = Field(default=0.8, description="Minimum acceptable price ratio for bargaining")

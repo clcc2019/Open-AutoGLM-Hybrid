@@ -2,13 +2,13 @@ services:
   reply-agent:
     build: .
     ports:
-      - "7777:8080"
+      - "8080:8080"
     env_file:
       - .env
     environment:
       - DATABASE_URL=postgresql+psycopg2://ai:ai@postgres:5432/ai
     volumes:
-      - ./knowledge_docs:/app/knowledge_docs:ro
+      - ./knowledge_docs:/app/knowledge_docs
       - lancedb_data:/app/tmp/lancedb
     depends_on:
       postgres:

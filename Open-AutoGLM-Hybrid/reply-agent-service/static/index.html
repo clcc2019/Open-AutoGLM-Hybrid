@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoGLM Agent Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+[x-cloak]{display:none!important}
+.tab-active{border-bottom:2px solid #3b82f6;color:#3b82f6;font-weight:600}
+.chat-bubble-left{background:#f3f4f6;border-radius:12px 12px 12px 2px}
+.chat-bubble-right{background:#3b82f6;color:#fff;border-radius:12px 12px 2px 12px}
+pre{white-space:pre-wrap;word-break:break-all}
+</style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen" x-data="app()" x-init="init()" x-cloak>
+
+<!-- Auth Gate -->
+<template x-if="!authenticated">
+<div class="flex items-center justify-center min-h-screen">
+  <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-sm">
+    <h1 class="text-xl font-bold mb-1">AutoGLM Agent Console</h1>
+    <p class="text-sm text-gray-500 mb-6">输入 API Key 登录管理后台</p>
+    <input x-model="loginKey" type="password" placeholder="API Key"
+      class="w-full border rounded-lg px-4 py-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-400"
+      @keydown.enter="doLogin()">
+    <button @click="doLogin()" class="w-full bg-blue-500 text-white rounded-lg py-2.5 font-medium hover:bg-blue-600 transition">
+      登录
+    </button>
+    <p x-show="loginError" class="text-red-500 text-sm mt-3" x-text="loginError"></p>
+  </div>
+</div>
+</template>
+
+<!-- Main App -->
+<template x-if="authenticated">
+<div class="max-w-6xl mx-auto px-4 py-6">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-bold">AutoGLM Agent Console</h1>
+      <p class="text-sm text-gray-500">智能客服 Agent 管理后台</p>
+    </div>
+    <button @click="logout()" class="text-sm text-gray-500 hover:text-red-500 transition">退出登录</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex border-b mb-6 gap-1 overflow-x-auto">
+    <template x-for="t in tabs" :key="t.id">
+      <button @click="tab=t.id" :class="tab===t.id?'tab-active':'text-gray-500 hover:text-gray-700'"
+        class="px-4 py-2.5 text-sm whitespace-nowrap transition" x-text="t.label"></button>
+    </template>
+  </div>
+
+  <!-- ==================== Dashboard ==================== -->
+  <div x-show="tab==='dashboard'" x-transition>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-lg p-4 shadow-sm">
+        <div class="text-xs text-gray-500 mb-1">运行时间</div>
+        <div class="text-lg font-semibold" x-text="formatUptime(status.uptime_s)"></div>
+      </div>
+      <div class="bg-white rounded-lg p-4 shadow-sm">
+        <div class="text-xs text-gray-500 mb-1">LLM 模型</div>
+        <div class="text-lg font-semibold truncate" x-text="status.llm_model||'-'"></div>
+      </div>
+      <div class="bg-white rounded-lg p-4 shadow-sm">
+        <div class="text-xs text-gray-500 mb-1">知识库文档</div>
+        <div class="text-lg font-semibold" x-text="status.knowledge_docs??'-'"></div>
+      </div>
+      <div class="bg-white rounded-lg p-4 shadow-sm">
+        <div class="text-xs text-gray-500 mb-1">在线设备</div>
+        <div class="text-lg font-semibold" x-text="Object.keys(status.devices||{}).length"></div>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-3">设备状态</h3>
+      <template x-if="Object.keys(status.devices||{}).length===0">
+        <p class="text-gray-400 text-sm">暂无设备连接</p>
+      </template>
+      <div class="space-y-2">
+        <template x-for="(info,did) in (status.devices||{})" :key="did">
+          <div class="flex items-center justify-between bg-gray-50 rounded px-4 py-2">
+            <span class="font-mono text-sm" x-text="did"></span>
+            <span class="text-xs" :class="info.last_seen_ago_s<30?'text-green-600':'text-yellow-600'"
+              x-text="info.last_seen_ago_s<30?'在线':'离线 ('+Math.round(info.last_seen_ago_s)+'s ago)'"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg p-5 shadow-sm">
+      <h3 class="font-semibold mb-3">系统信息</h3>
+      <div class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+        <div class="text-gray-500">LLM 提供商</div><div x-text="status.llm_provider||'-'"></div>
+        <div class="text-gray-500">Vision 模型</div><div x-text="status.vision_model||'-'"></div>
+        <div class="text-gray-500">Embedding 模型</div><div x-text="status.embedding_model||'-'"></div>
+        <div class="text-gray-500">数据库</div><div x-text="status.database||'-'"></div>
+        <div class="text-gray-500">认证</div><div x-text="status.auth_enabled?'已启用':'未启用'"></div>
+        <div class="text-gray-500">最近对话数</div><div x-text="status.recent_conversations??'-'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Knowledge ==================== -->
+  <div x-show="tab==='knowledge'" x-transition>
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-lg font-semibold">知识库文档</h2>
+      <div class="flex gap-2">
+        <button @click="reloadKnowledge()" class="px-3 py-1.5 text-sm bg-gray-100 rounded-lg hover:bg-gray-200 transition">重新加载</button>
+        <button @click="kbEditing={path:'',content:'',category:'general',isNew:true}" class="px-3 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">新增文档</button>
+      </div>
+    </div>
+
+    <!-- Editor Modal -->
+    <template x-if="kbEditing">
+    <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div class="flex justify-between items-center px-6 py-4 border-b">
+          <h3 class="font-semibold" x-text="kbEditing.isNew?'新增文档':'编辑文档'"></h3>
+          <button @click="kbEditing=null" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <div class="p-6 space-y-4 overflow-y-auto flex-1">
+          <div>
+            <label class="block text-sm font-medium mb-1">文件路径</label>
+            <input x-model="kbEditing.path" :disabled="!kbEditing.isNew" placeholder="e.g. products/my_product.md"
+              class="w-full border rounded-lg px-3 py-2 text-sm disabled:bg-gray-100">
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">内容 (Markdown)</label>
+            <textarea x-model="kbEditing.content" rows="15"
+              class="w-full border rounded-lg px-3 py-2 text-sm font-mono resize-y"></textarea>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 px-6 py-4 border-t">
+          <button @click="kbEditing=null" class="px-4 py-2 text-sm rounded-lg border hover:bg-gray-50">取消</button>
+          <button @click="saveKnowledge()" class="px-4 py-2 text-sm rounded-lg bg-blue-500 text-white hover:bg-blue-600">保存</button>
+        </div>
+      </div>
+    </div>
+    </template>
+
+    <!-- Document List -->
+    <div class="bg-white rounded-lg shadow-sm overflow-hidden">
+      <template x-if="kbDocs.length===0">
+        <p class="text-gray-400 text-sm p-6">暂无知识文档</p>
+      </template>
+      <template x-for="doc in kbDocs" :key="doc.path">
+        <div class="flex items-center justify-between px-5 py-3 border-b last:border-0 hover:bg-gray-50">
+          <div>
+            <span class="font-mono text-sm" x-text="doc.path"></span>
+            <span class="ml-2 text-xs bg-gray-100 text-gray-600 rounded px-2 py-0.5" x-text="doc.category"></span>
+          </div>
+          <div class="flex gap-2">
+            <button @click="editKnowledge(doc)" class="text-xs text-blue-500 hover:underline">编辑</button>
+            <button @click="deleteKnowledge(doc)" class="text-xs text-red-500 hover:underline">删除</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ==================== Command ==================== -->
+  <div x-show="tab==='command'" x-transition>
+    <h2 class="text-lg font-semibold mb-4">指令控制</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+      <button @click="sendShortcut('open_app',{app_name:'闲鱼'})" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">打开闲鱼</div><div class="text-xs text-gray-500 mt-1">launch_app</div>
+      </button>
+      <button @click="sendShortcut('open_app',{app_name:'微信'})" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">打开微信</div><div class="text-xs text-gray-500 mt-1">launch_app</div>
+      </button>
+      <button @click="sendShortcut('go_back')" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">返回</div><div class="text-xs text-gray-500 mt-1">go_back</div>
+      </button>
+      <button @click="sendShortcut('go_home')" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">Home</div><div class="text-xs text-gray-500 mt-1">go_home</div>
+      </button>
+      <button @click="sendShortcut('scroll_down')" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">向下滚动</div><div class="text-xs text-gray-500 mt-1">scroll_down</div>
+      </button>
+      <button @click="sendShortcut('scroll_up')" class="bg-white rounded-lg p-4 shadow-sm hover:shadow transition text-left">
+        <div class="font-medium">向上滚动</div><div class="text-xs text-gray-500 mt-1">scroll_up</div>
+      </button>
+    </div>
+
+    <!-- Send message -->
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-3">发送消息</h3>
+      <div class="flex gap-2">
+        <input x-model="cmdText" placeholder="输入要发送的文本..." class="flex-1 border rounded-lg px-3 py-2 text-sm"
+          @keydown.enter="sendMessage()">
+        <button @click="sendMessage()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600">发送</button>
+      </div>
+    </div>
+
+    <!-- Custom command -->
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-3">自定义指令 (JSON)</h3>
+      <textarea x-model="cmdJson" rows="3" placeholder='[{"action":"tap","x":540,"y":1200}]'
+        class="w-full border rounded-lg px-3 py-2 text-sm font-mono mb-2"></textarea>
+      <button @click="sendRawCommand()" class="px-4 py-2 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800">执行</button>
+    </div>
+
+    <!-- Device selector -->
+    <div class="bg-white rounded-lg p-5 shadow-sm">
+      <h3 class="font-semibold mb-3">目标设备</h3>
+      <input x-model="cmdDevice" class="border rounded-lg px-3 py-2 text-sm w-60" placeholder="phone-1">
+    </div>
+
+    <!-- Result -->
+    <template x-if="cmdResult">
+    <div class="mt-4 bg-white rounded-lg p-5 shadow-sm">
+      <h3 class="font-semibold mb-2">执行结果</h3>
+      <pre class="text-xs bg-gray-50 rounded p-3" x-text="JSON.stringify(cmdResult,null,2)"></pre>
+    </div>
+    </template>
+  </div>
+
+  <!-- ==================== Chat Test ==================== -->
+  <div x-show="tab==='chat'" x-transition>
+    <h2 class="text-lg font-semibold mb-4">对话测试</h2>
+    <div class="bg-white rounded-lg shadow-sm flex flex-col" style="height:60vh">
+      <div class="flex-1 overflow-y-auto p-5 space-y-3" id="chatBox">
+        <template x-for="(msg,i) in chatMessages" :key="i">
+          <div :class="msg.role==='buyer'?'flex justify-start':'flex justify-end'">
+            <div :class="msg.role==='buyer'?'chat-bubble-left':'chat-bubble-right'" class="px-4 py-2.5 max-w-[75%] text-sm">
+              <span x-text="msg.text"></span>
+            </div>
+          </div>
+        </template>
+        <template x-if="chatLoading">
+          <div class="flex justify-end"><div class="chat-bubble-right px-4 py-2.5 text-sm opacity-60">思考中...</div></div>
+        </template>
+      </div>
+      <div class="border-t p-4 flex gap-2">
+        <input x-model="chatInput" placeholder="模拟买家消息..." class="flex-1 border rounded-lg px-3 py-2 text-sm"
+          @keydown.enter="sendChat()" :disabled="chatLoading">
+        <button @click="sendChat()" :disabled="chatLoading"
+          class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50">发送</button>
+        <button @click="chatMessages=[]" class="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">清空</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Settings ==================== -->
+  <div x-show="tab==='settings'" x-transition>
+    <h2 class="text-lg font-semibold mb-4">系统配置</h2>
+    <div class="bg-white rounded-lg p-5 shadow-sm mb-4">
+      <h3 class="font-semibold mb-4">LLM 配置 (只读)</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <template x-for="key in ['llm_provider','llm_model','llm_api_key','llm_base_url','embedding_model','embedding_base_url','vision_model','vision_base_url','database_url']" :key="key">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1" x-text="key"></label>
+            <div class="bg-gray-50 rounded px-3 py-2 text-sm font-mono truncate" x-text="cfgData[key]||'-'"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg p-5 shadow-sm">
+      <h3 class="font-semibold mb-4">业务规则 (可修改)</h3>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium mb-1">最低议价比例 (min_price_ratio)</label>
+          <input x-model.number="cfgEdit.min_price_ratio" type="number" step="0.01" min="0" max="1"
+            class="border rounded-lg px-3 py-2 text-sm w-40">
+          <span class="text-xs text-gray-500 ml-2">0~1，如 0.8 表示最低接受原价的 80%</span>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">敏感词 (auto_escalate_keywords)</label>
+          <input x-model="cfgEdit.auto_escalate_keywords"
+            class="border rounded-lg px-3 py-2 text-sm w-full" placeholder="投诉,举报,消协">
+          <span class="text-xs text-gray-500">逗号分隔</span>
+        </div>
+        <button @click="saveSettings()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div x-show="toast" x-transition class="fixed bottom-6 right-6 bg-gray-800 text-white px-5 py-3 rounded-lg shadow-lg text-sm z-50"
+    x-text="toast"></div>
+</div>
+</template>
+
+<script>
+function app() {
+  return {
+    authenticated: false,
+    loginKey: '',
+    loginError: '',
+    apiKey: '',
+    tab: 'dashboard',
+    tabs: [
+      {id:'dashboard',label:'仪表盘'},
+      {id:'knowledge',label:'知识库'},
+      {id:'command',label:'指令控制'},
+      {id:'chat',label:'对话测试'},
+      {id:'settings',label:'设置'},
+    ],
+    toast: '',
+    status: {},
+    kbDocs: [],
+    kbEditing: null,
+    cmdDevice: 'phone-1',
+    cmdText: '',
+    cmdJson: '',
+    cmdResult: null,
+    chatMessages: [],
+    chatInput: '',
+    chatLoading: false,
+    cfgData: {},
+    cfgEdit: {min_price_ratio:0.8, auto_escalate_keywords:''},
+
+    init() {
+      const saved = localStorage.getItem('autoglm_api_key');
+      if (saved) {
+        this.apiKey = saved;
+        this.authenticated = true;
+        this.refresh();
+      }
+    },
+
+    async doLogin() {
+      this.loginError = '';
+      try {
+        const r = await this.api('/api/admin/status');
+        if (r.ok) {
+          this.apiKey = this.loginKey;
+          localStorage.setItem('autoglm_api_key', this.apiKey);
+          this.authenticated = true;
+          this.refresh();
+        } else if (r.status === 401) {
+          this.loginError = 'API Key 无效';
+        } else {
+          this.loginError = '连接失败: HTTP ' + r.status;
+        }
+      } catch(e) {
+        this.loginError = '连接失败: ' + e.message;
+      }
+    },
+
+    logout() {
+      localStorage.removeItem('autoglm_api_key');
+      this.authenticated = false;
+      this.apiKey = '';
+      this.loginKey = '';
+    },
+
+    async api(path, opts={}) {
+      const headers = {...(opts.headers||{}), 'X-API-Key': this.apiKey || this.loginKey};
+      if (opts.body && typeof opts.body === 'object') {
+        headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(opts.body);
+      }
+      return fetch(path, {...opts, headers});
+    },
+
+    async apiJson(path, opts={}) {
+      const r = await this.api(path, opts);
+      if (r.status === 401) { this.logout(); return null; }
+      return r.json();
+    },
+
+    async refresh() {
+      this.loadStatus();
+      this.loadKnowledge();
+      this.loadSettings();
+    },
+
+    async loadStatus() {
+      const d = await this.apiJson('/api/admin/status');
+      if (d) this.status = d;
+    },
+
+    async loadKnowledge() {
+      const d = await this.apiJson('/api/admin/knowledge');
+      if (d) this.kbDocs = d.documents || [];
+    },
+
+    async loadSettings() {
+      const d = await this.apiJson('/api/admin/settings');
+      if (d) {
+        this.cfgData = d;
+        this.cfgEdit.min_price_ratio = d.min_price_ratio;
+        this.cfgEdit.auto_escalate_keywords = d.auto_escalate_keywords;
+      }
+    },
+
+    async reloadKnowledge() {
+      await this.apiJson('/api/knowledge/reload', {method:'POST'});
+      await this.loadKnowledge();
+      await this.loadStatus();
+      this.showToast('知识库已重新加载');
+    },
+
+    async editKnowledge(doc) {
+      const d = await this.apiJson('/api/admin/knowledge/'+doc.path);
+      if (d) this.kbEditing = {path:doc.path, content:d.content, category:doc.category, isNew:false};
+    },
+
+    async saveKnowledge() {
+      const e = this.kbEditing;
+      if (!e) return;
+      const method = e.isNew ? 'POST' : 'PUT';
+      const r = await this.apiJson('/api/admin/knowledge/'+e.path, {method, body:{content:e.content, category:e.category}});
+      if (r) {
+        this.kbEditing = null;
+        await this.loadKnowledge();
+        await this.loadStatus();
+        this.showToast(e.isNew ? '文档已创建' : '文档已更新');
+      }
+    },
+
+    async deleteKnowledge(doc) {
+      if (!confirm('确定删除 '+doc.path+'？')) return;
+      await this.apiJson('/api/admin/knowledge/'+doc.path, {method:'DELETE'});
+      await this.loadKnowledge();
+      await this.loadStatus();
+      this.showToast('文档已删除');
+    },
+
+    async sendShortcut(shortcut, params={}) {
+      const d = await this.apiJson('/api/phone/command', {method:'POST', body:{device_id:this.cmdDevice, shortcut, params}});
+      this.cmdResult = d;
+      this.showToast('指令已入队');
+    },
+
+    async sendMessage() {
+      if (!this.cmdText.trim()) return;
+      await this.sendShortcut('send_message', {text:this.cmdText});
+      this.cmdText = '';
+    },
+
+    async sendRawCommand() {
+      try {
+        const cmds = JSON.parse(this.cmdJson);
+        const d = await this.apiJson('/api/phone/command', {method:'POST', body:{device_id:this.cmdDevice, commands:cmds}});
+        this.cmdResult = d;
+        this.showToast('指令已入队');
+      } catch(e) {
+        this.showToast('JSON 格式错误');
+      }
+    },
+
+    async sendChat() {
+      if (!this.chatInput.trim() || this.chatLoading) return;
+      const msg = this.chatInput.trim();
+      this.chatInput = '';
+      this.chatMessages.push({role:'buyer', text:msg});
+      this.chatLoading = true;
+      this.$nextTick(()=>{document.getElementById('chatBox').scrollTop=99999});
+      try {
+        const d = await this.apiJson('/api/quick-reply', {method:'POST', body:{buyer_message:msg}});
+        if (d) this.chatMessages.push({role:'agent', text:d.reply});
+      } catch(e) {
+        this.chatMessages.push({role:'agent', text:'[错误] '+e.message});
+      }
+      this.chatLoading = false;
+      this.$nextTick(()=>{document.getElementById('chatBox').scrollTop=99999});
+    },
+
+    async saveSettings() {
+      const d = await this.apiJson('/api/admin/settings', {method:'PUT', body:this.cfgEdit});
+      if (d) {
+        await this.loadSettings();
+        this.showToast('设置已保存');
+      }
+    },
+
+    formatUptime(s) {
+      if (!s) return '-';
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+      return h>0 ? h+'h '+m+'m' : m+'m';
+    },
+
+    showToast(msg) {
+      this.toast = msg;
+      setTimeout(()=>this.toast='', 2500);
+    },
+  }
+}
+</script>
+</body>
+</html>

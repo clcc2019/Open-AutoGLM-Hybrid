@@ -22,6 +22,7 @@ class AgentPoller(
     private val service: AutoGLMAccessibilityService,
     private var agentUrl: String,
     private var deviceId: String = "phone-1",
+    private var apiKey: String = "",
 ) {
     companion object {
         private const val TAG = "AutoGLM-Poller"
@@ -63,9 +64,10 @@ class AgentPoller(
         onStatusChange?.invoke("stopped")
     }
 
-    fun updateConfig(url: String, device: String) {
+    fun updateConfig(url: String, device: String, key: String = "") {
         agentUrl = url.trimEnd('/')
         deviceId = device
+        apiKey = key
     }
 
     private val pollRunnable = object : Runnable {
@@ -98,6 +100,9 @@ class AgentPoller(
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
+        if (apiKey.isNotEmpty()) {
+            conn.setRequestProperty("X-API-Key", apiKey)
+        }
         conn.connectTimeout = CONNECT_TIMEOUT
         conn.readTimeout = READ_TIMEOUT
         conn.doOutput = true

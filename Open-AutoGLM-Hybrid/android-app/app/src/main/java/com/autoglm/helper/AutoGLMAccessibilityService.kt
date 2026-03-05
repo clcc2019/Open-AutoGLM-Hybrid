@@ -58,9 +58,9 @@ class AutoGLMAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Service destroyed")
     }
 
-    fun startPoller(agentUrl: String, deviceId: String = "phone-1") {
+    fun startPoller(agentUrl: String, deviceId: String = "phone-1", apiKey: String = "") {
         stopPoller()
-        agentPoller = AgentPoller(this, agentUrl, deviceId).apply {
+        agentPoller = AgentPoller(this, agentUrl, deviceId, apiKey).apply {
             onStatusChange = { status ->
                 pollerStatus = status
                 Log.i(TAG, "Poller status: $status")
